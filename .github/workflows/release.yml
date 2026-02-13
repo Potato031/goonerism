@@ -72,29 +72,24 @@ jobs:
             wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
             chmod +x linuxdeploy*.AppImage
             
-            # RESIZE THE ICON TO 128x128 (Fixes the resolution error)
-            convert potato.png -resize 128x128! potato_fixed.png
-            
             mkdir -p AppDir
             cp build/PotatoEditor AppDir/
             find . -name "styles.qss" -not -path "./build/*" -exec cp {} AppDir/ \;
             
-            # Create .desktop file
+            # Create .desktop file (Minimal, no icon)
             echo "[Desktop Entry]" > PotatoEditor.desktop
             echo "Type=Application" >> PotatoEditor.desktop
             echo "Name=PotatoEditor" >> PotatoEditor.desktop
             echo "Exec=PotatoEditor" >> PotatoEditor.desktop
-            echo "Icon=potato_fixed" >> PotatoEditor.desktop
             echo "Categories=Development;" >> PotatoEditor.desktop
             
             export LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
             export LDAI_OUTPUT="PotatoEditor_linux.AppImage"
             
-            # Run linuxdeploy using the resized icon
+            # Run linuxdeploy without the -i (icon) flag
             ./linuxdeploy-x86_64.AppImage --appdir AppDir \
               -e AppDir/PotatoEditor \
               -d PotatoEditor.desktop \
-              -i potato_fixed.png \
               --plugin qt \
               --output appimage
             
