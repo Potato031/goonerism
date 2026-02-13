@@ -1,3 +1,4 @@
+#pragma comment(linker, "/SUBSYSTEM:windows /ENTRY:mainCRTStartup")
 #include <QApplication>
 #include <QFile>
 #include <QTimer>
@@ -9,12 +10,11 @@
 #include <QMessageBox>
 #include <QProcess>
 #include "../Includes/mainWindow.h"
-#pragma comment(linker, "/SUBSYSTEM:windows /ENTRY:mainCRTStartup")
 int main(int argc, char *argv[]) {
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+/*#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
-#endif
+#endif*/
     qputenv("QT_MULTIMEDIA_PREFERRED_PLUGINS", "ffmpeg");
 
     QApplication app(argc, argv);

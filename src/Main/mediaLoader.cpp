@@ -30,12 +30,15 @@ void TimelineWidget::setMediaSource(const QUrl &url) {
     this->update();
 }
 
-void TimelineWidget::setDuration(qint64 ms) {
-    durationMs = ms;
+void TimelineWidget::setDuration(qint64 duration) {
+    this->durationMs = duration;
+    this->zoomFactor = 1.0;
+    this->scrollOffset = 0;
 
-    if (segments.size() == 1 && segments[0].endMs == 1000) {
-        segments[0].startMs = 0;
-        segments[0].endMs = ms;
+    if (segments.isEmpty()) {
+        segments.append({0, durationMs});
+    } else {
+        segments[0].endMs = durationMs;
     }
 
     update();

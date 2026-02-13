@@ -21,6 +21,10 @@
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setupUi();
+
+    this->setAcceptDrops(true);
+    DropFilter* filter = new DropFilter(player, timeline, statusLabel);
+    qApp->installEventFilter(filter);
     setupConnections();
     loadInitialVideo();
 }
@@ -221,6 +225,10 @@ void MainWindow::importMedia() {
         player->play();
         statusLabel->setText(QFileInfo(file).fileName().toUpper());
     }
+    this->repaint();
+    QApplication::processEvents();
+
+    timeline->setDuration(player->duration());
 }
 
 void MainWindow::loadInitialVideo() {

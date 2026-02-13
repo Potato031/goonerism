@@ -7,7 +7,7 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent) {
     setMinimumHeight(180);
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
-
+    setAcceptDrops(true);
     videoSink = new QVideoSink(this);
     thumbPlayer = new QMediaPlayer(this);
     thumbPlayer->setVideoOutput(videoSink);
