@@ -313,6 +313,7 @@ void MainWindow::downloadUpdate(const QString &url) {
     connect(reply, &QNetworkReply::finished, [this, reply, progress, manager]() {
         progress->close();
         if (reply->error() == QNetworkReply::NoError) {
+            // --- RESOLVE WRITABLE PATH ---
             QString appPath;
 #ifdef Q_OS_LINUX
             char* envApp = getenv("APPIMAGE");
@@ -327,13 +328,14 @@ void MainWindow::downloadUpdate(const QString &url) {
 #else
             QString fileName = folderDir + "/update.AppImage";
 #endif
+
             QFile file(fileName);
             if (file.open(QFile::WriteOnly)) {
                 file.write(reply->readAll());
                 file.close();
                 finalizeUpdate();
             } else {
-                QMessageBox::critical(this, "Update Error", "Could not save to: " + fileName);
+                QMessageBox::critical(this, "Update Error", "Could not save to writable directory: " + fileName);
                 isUpdating = false;
             }
         } else {
@@ -349,6 +351,7 @@ void MainWindow::downloadUpdate(const QString &url) {
 }
 
 void MainWindow::finalizeUpdate() {
+    // --- RESOLVE WRITABLE PATH ---
     QString appPath;
 #ifdef Q_OS_LINUX
     char* envApp = getenv("APPIMAGE");
@@ -388,9 +391,10 @@ void MainWindow::finalizeUpdate() {
             << "sleep 2\n"
             << "cd \"" << folderDir << "\"\n"
             << "chmod +x update.AppImage\n"
-            << "mv update.AppImage PotatoEditor_linux.AppImage\n"
-            << "chmod +x PotatoEditor_linux.AppImage\n"
-            << "./PotatoEditor_linux.AppImage &\n"
+            // Use quotes in case there are spaces in the user's directory name
+            << "mv \"update.AppImage\" \"PotatoEditor_linux.AppImage\"\n"
+            << "chmod +x \"PotatoEditor_linux.AppImage\"\n"
+            << "./\"PotatoEditor_linux.AppImage\" &\n"
             << "rm -- \"$0\"\n";
         shFile.close();
 

@@ -29,13 +29,10 @@ jobs:
       - name: Package Windows
         run: |
           cd build/Release
-          # Deploy Qt dependencies
           windeployqt --multimedia PotatoEditor.exe
           
-          # Copy ffmpeg if it exists in your repo (removing styles.qss copy as it's now embedded)
           Get-ChildItem -Path "${{ github.workspace }}" -Filter "ffmpeg.exe" -Recurse | Where-Object { $_.FullName -notlike "*build*" } | Copy-Item -Destination "." -Force
           
-          # Zip everything in the Release folder
           Compress-Archive -Path * -DestinationPath ../../PotatoEditor_windows.zip
 
       - name: Upload Windows Release
