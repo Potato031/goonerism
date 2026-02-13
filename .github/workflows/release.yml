@@ -29,9 +29,13 @@ jobs:
       - name: Package Windows
         run: |
           cd build/Release
+          # Deploy Qt dependencies
           windeployqt --multimedia PotatoEditor.exe
-          Get-ChildItem -Path "${{ github.workspace }}" -Filter "styles.qss" -Recurse | Where-Object { $_.FullName -notlike "*build*" } | Copy-Item -Destination "." -Force
+          
+          # Copy ffmpeg if it exists in your repo (removing styles.qss copy as it's now embedded)
           Get-ChildItem -Path "${{ github.workspace }}" -Filter "ffmpeg.exe" -Recurse | Where-Object { $_.FullName -notlike "*build*" } | Copy-Item -Destination "." -Force
+          
+          # Zip everything in the Release folder
           Compress-Archive -Path * -DestinationPath ../../PotatoEditor_windows.zip
 
       - name: Upload Windows Release
@@ -67,36 +71,32 @@ jobs:
 
       - name: Package Linux (AppImage)
         run: |
-            # Download tools
-            wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-            wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-            chmod +x linuxdeploy*.AppImage
-            
-            # Download valid icon
-            wget -O icon.png https://github.com/github.png?size=128
-            
-            mkdir -p AppDir
-            cp build/PotatoEditor AppDir/
-            find . -name "styles.qss" -not -path "./build/*" -exec cp {} AppDir/ \;
-            
-            # Create .desktop file
-            echo "[Desktop Entry]" > PotatoEditor.desktop
-            echo "Type=Application" >> PotatoEditor.desktop
-            echo "Name=PotatoEditor" >> PotatoEditor.desktop
-            echo "Exec=PotatoEditor" >> PotatoEditor.desktop
-            echo "Icon=icon" >> PotatoEditor.desktop
-            echo "Categories=Development;" >> PotatoEditor.desktop
-            
-            export LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
-            export LDAI_OUTPUT="PotatoEditor_linux.AppImage"
-            
-            # Run linuxdeploy (This creates PotatoEditor_linux.AppImage directly)
-            ./linuxdeploy-x86_64.AppImage --appdir AppDir \
-              -e AppDir/PotatoEditor \
-              -d PotatoEditor.desktop \
-              -i icon.png \
-              --plugin qt \
-              --output appimage
+          wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+          
+          wget -O icon.png https://github.com/github.png?size=128
+          
+          mkdir -p AppDir
+          cp build/PotatoEditor AppDir/
+          
+          echo "[Desktop Entry]" > PotatoEditor.desktop
+          echo "Type=Application" >> PotatoEditor.desktop
+          echo "Name=PotatoEditor" >> PotatoEditor.desktop
+          echo "Exec=PotatoEditor" >> PotatoEditor.desktop
+          echo "Icon=icon" >> PotatoEditor.desktop
+          echo "Categories=Development;" >> PotatoEditor.desktop
+          
+          export LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
+          export LDAI_OUTPUT="PotatoEditor_linux.AppImage"
+          
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir \
+            -e AppDir/PotatoEditor \
+            -d PotatoEditor.desktop \
+            -i icon.png \
+            --plugin qt \
+            --output appimage
+
       - name: Upload Linux Release
         uses: softprops/action-gh-release@v1
         with:

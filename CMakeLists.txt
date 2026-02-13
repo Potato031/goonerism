@@ -15,6 +15,7 @@ find_package(Qt6 REQUIRED COMPONENTS
 
 add_executable(PotatoEditor
         src/Main/main.cpp
+        resources.qrc
         src/Includes/timelinewidget.h
         src/Main/timelinewidget.cpp
         src/Main/borderlesswindow.cpp
