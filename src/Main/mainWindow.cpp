@@ -367,18 +367,25 @@ void MainWindow::finalizeUpdate() {
         QTextStream out(&batchFile);
         out << "@echo off\n"
             << "title POTATO UPDATE ENGINE\n"
-            << "timeout /t 1 /nobreak >nul\n"
+            << "echo Waiting for PotatoEditor to exit...\n"
             << ":loop\n"
             << "taskkill /f /im PotatoEditor.exe >nul 2>&1\n"
             << "timeout /t 1 /nobreak >nul\n"
-            << "if not errorlevel 1 goto loop\n"
+            // Check if the process is STILL running
+            << "tasklist /fi \"imagename eq PotatoEditor.exe\" | find /i \"PotatoEditor.exe\" >nul\n"
+            // If FIND found the name (Error Level 0), the app is still there, so loop.
+            << "if %errorlevel% equ 0 goto loop\n"
+            << "echo App closed. Extracting update...\n"
             << "powershell -windowstyle hidden -command \"Expand-Archive -Path '" << folderDir << "/update.zip' -DestinationPath '" << folderDir << "/temp_update' -Force\"\n"
+            << "echo Installing...\n"
             << "robocopy \"" << folderDir << "/temp_update\" \"" << folderDir << "\" /S /E /MOVE >nul\n"
             << "rd /s /q \"" << folderDir << "/temp_update\"\n"
             << "del /f /q \"" << folderDir << "/update.zip\"\n"
             << "start \"\" \"" << folderDir << "/PotatoEditor.exe\"\n"
             << "del \"%~f0\"\n";
         batchFile.close();
+
+        // Use /C to ensure the window stays open if there is an error, or /Q for quiet
         QProcess::startDetached("cmd.exe", {"/c", folderDir + "/update.bat"});
         qApp->quit();
     }
