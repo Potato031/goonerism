@@ -357,13 +357,27 @@ void MainWindow::finalizeUpdate() {
             << "tasklist /fi \"imagename eq PotatoEditor.exe\" | find /i \"PotatoEditor.exe\" >nul\n"
             << "if not errorlevel 1 goto loop\n"
 
-            << "echo Installing files...\n"
-            << "xcopy /s /y \"temp_update\\*\" \".\\\"\n"
+            << "echo Preparing update...\n"
+            << "if exist \"temp_update\" rd /s /q \"temp_update\"\n"
+            << "mkdir temp_update\n"
+
+            << "echo Extracting (This may take a moment)...\n"
+            // Silent PowerShell extraction
+            << "powershell -windowstyle hidden -command \"Expand-Archive -Path 'update.zip' -DestinationPath 'temp_update' -Force\"\n"
+
+            << "echo Installing new version...\n"
+            << "for /d %%d in (\"temp_update\\*\") do (\n"
+            << "    robocopy \"%%d\" \".\" /S /E /IS /IT /NC /NS /NP /NJH /NJS /MOVE >nul\n"
+            << ")\n"
+            << "robocopy \"temp_update\" \".\" /S /E /IS /IT /NC /NS /NP /NJH /NJS /MOVE >nul\n"
+
             << "echo Cleaning up...\n"
-            << "rd /s /q \"temp_update\"\n"
-            << "del update.zip\n"
+            << "timeout /t 1 /nobreak >nul\n"
+            << "if exist \"temp_update\" rd /s /q \"temp_update\"\n"
+            << "if exist \"update.zip\" del /f /q \"update.zip\"\n"
+
             << "echo Restarting...\n"
-            << "start PotatoEditor.exe\n"
+            << "start \"\" \"PotatoEditor.exe\"\n"
             << "del \"%~f0\"\n";
         batchFile.close();
 
