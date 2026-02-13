@@ -97,11 +97,11 @@ jobs:
             # Run linuxdeploy
             # We add --create-desktop-file and provide an icon to satisfy the tool
             ./linuxdeploy-x86_64.AppImage --appdir AppDir \
-              -e AppDir/PotatoEditor \
-              -d PotatoEditor.desktop \
-              -i potato.png \
-              --plugin qt \
-              --output appimage
+            -e AppDir/PotatoEditor \
+            -d PotatoEditor.desktop \
+            -i potato.png \
+            --plugin qt \
+            --output appimage
             
             # Ensure the file is named correctly
             mv PotatoEditor-*-x86_64.AppImage PotatoEditor_linux.AppImage
