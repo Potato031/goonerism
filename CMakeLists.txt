@@ -1,0 +1,39 @@
+cmake_minimum_required(VERSION 3.16)
+project(SimpleVideoEditor)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+
+find_package(Qt6 REQUIRED COMPONENTS
+        Widgets
+        Multimedia
+        MultimediaWidgets
+)
+
+add_executable(video_player src/Main/main.cpp
+        src/Includes/timelinewidget.h
+        src/Main/timelinewidget.cpp
+        src/Main/borderlesswindow.cpp
+        src/Includes/borderlesswindow.h
+        src/Main/audio.cpp
+        src/Main/mouseEvents.cpp
+        src/Main/notification.cpp
+        src/Main/mediaLoader.cpp
+        src/Main/keyboardEvents.cpp
+        src/Main/export.cpp
+        src/Main/undoredo.cpp
+        src/Includes/mediaSource.h
+        src/Includes/dropFilter.h
+        src/Main/mainWindow.cpp
+        src/Includes/resizeFilter.h
+        src/Includes/mainWindow.h
+)
+
+target_link_libraries(video_player
+        Qt6::Widgets
+        Qt6::Multimedia
+        Qt6::MultimediaWidgets
+)

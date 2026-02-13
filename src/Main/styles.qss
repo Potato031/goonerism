@@ -1,0 +1,158 @@
+/* Global Reset & Typography */
+QWidget {
+    background-color: #040605; /* Deep Forest Black */
+    color: #A0ACA4;
+    font-size: 13px;
+    outline: none;
+}
+
+/* Main Window Container */
+#MainCanvas {
+    background-color: #080B09;
+    border: 1px solid #1A221C;
+    border-radius: 12px;
+}
+
+/* Video Section */
+#VideoContainer {
+    background-color: #000000;
+    border: 1px solid #222B25;
+    border-radius: 8px;
+}
+
+/* The Action Button - Emerald Gradient */
+QPushButton#ActionBtn {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #50C878, stop:1 #2E8B57);
+    border: none;
+    border-radius: 22px;
+    color: #000000;
+    font-size: 11px;
+    letter-spacing: 2px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+QPushButton#ActionBtn:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #72E095, stop:1 #50C878);
+}
+
+QPushButton#ActionBtn[state="playing"] {
+    background: #000000;
+    color: #50C878;
+    border: 2px solid #50C878;
+}
+
+/* Tool Buttons - Dark Ivy Look */
+QPushButton[class="ToolBtn"] {
+    background-color: #0F1612;
+    border: 1px solid #1D2921;
+    border-radius: 4px;
+    color: #607568;
+    font-weight: 800;
+    font-size: 10px;
+    padding: 5px 10px;
+}
+
+QPushButton[class="ToolBtn"]:hover {
+    background-color: #16221B;
+    border-color: #50C878;
+    color: #E0F2E9;
+}
+
+
+/* Sleek Sliders - Mint Accents */
+QSlider::groove:horizontal {
+    height: 2px;
+    background: #1A241E;
+}
+
+QSlider::sub-page:horizontal {
+    background: #50C878;
+}
+
+QSlider::handle:horizontal {
+    background: #50C878;
+    border: 1px solid #000000;
+    width: 12px;
+    height: 12px;
+    margin: -5px 0;
+    border-radius: 6px;
+}
+
+/* Industrial Export Input */
+QLineEdit#ExportNameInput {
+    background-color: #000000;
+    border: 1px solid #1D2921;
+    border-radius: 4px;
+    padding: 6px 12px;
+    color: #50C878;
+    font-weight: 800;
+    font-size: 12px;
+}
+
+QLineEdit#ExportNameInput:focus {
+    border: 1px solid #50C878;
+    background-color: #080B09;
+}
+
+/* Labels */
+QLabel#MetaData, #InputLabel {
+    color: #4A5C50;
+    font-weight: 800;
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+
+/* Notifications */
+QWidget#ProgressNotificationBg {
+    background-color: #080B09;
+    border: 2px solid #50C878;
+    border-radius: 10px;
+}
+
+QProgressBar#ProgressNotificationBar::chunk {
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #50C878, stop:1 #00FF7F);
+    border-radius: 4px;
+}
+
+QWidget#ToastNotification QLabel#ToastLabel {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #50C878, stop:1 #2E8B57);
+    color: #000000;
+    font-weight: 900;
+}
+
+QLabel#LogoBold {
+    color: #FFFFFF;
+    font-weight: 900;
+    font-size: 18px;
+    background: transparent;
+}
+
+
+/* Logos */
+QLabel#LogoLight {
+    color: #50C878;
+    font-weight: 900;
+    font-size: 18px;
+    background: transparent;
+}
+
+/* The Timeline Properties */
+TimelineWidget {
+    qproperty-accentColor: #50C878;       /* Emerald */
+    qproperty-secondaryColor: #00FA9A;    /* Medium Spring Green */
+    qproperty-backgroundColor: #040605;   /* Deep Dark Green */
+    qproperty-trackColor: #121A15;        /* Dark Moss */
+    qproperty-waveformColor: #355E3B;     /* Hunter Green */
+}
+
+TimelineWidget:focus {
+    border: 1px solid #50C878;
+}
+
+VideoWithCropWidget {
+    qproperty-accentColor: #50C878;       /* Emerald Crop Box */
+    qproperty-secondaryColor: #00FA9A;    /* Mint Filter Box */
+    qproperty-backgroundColor: #040605;   /* Background Letterboxing */
+}

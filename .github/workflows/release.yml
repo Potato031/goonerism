@@ -1,0 +1,30 @@
+name: Build and Release
+on:
+  push:
+    tags:
+      - 'v*' # Triggers only when you push a tag like v1.0.0
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.5.0'
+      - name: Build
+        run: |
+          cmake -B build -G "Visual Studio 17 2022"
+          cmake --build build --config Release
+      - name: Package (windeployqt)
+        run: |
+          cd build/Release
+          windeployqt --multimedia PotatoEditor.exe
+          Compress-Archive -Path * -DestinationPath ../../PotatoEditor_Windows.zip
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: PotatoEditor_Windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
