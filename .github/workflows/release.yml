@@ -76,17 +76,19 @@ jobs:
             cp build/PotatoEditor AppDir/
             find . -name "styles.qss" -not -path "./build/*" -exec cp {} AppDir/ \;
             
-            # Create .desktop file (Minimal, no icon)
+            # Create .desktop file (Points to a generic system icon)
             echo "[Desktop Entry]" > PotatoEditor.desktop
             echo "Type=Application" >> PotatoEditor.desktop
             echo "Name=PotatoEditor" >> PotatoEditor.desktop
             echo "Exec=PotatoEditor" >> PotatoEditor.desktop
+            echo "Icon=applications-other" >> PotatoEditor.desktop
             echo "Categories=Development;" >> PotatoEditor.desktop
             
             export LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
             export LDAI_OUTPUT="PotatoEditor_linux.AppImage"
             
-            # Run linuxdeploy without the -i (icon) flag
+            # Run linuxdeploy
+            # We don't use -i because we're using a system-theme icon
             ./linuxdeploy-x86_64.AppImage --appdir AppDir \
               -e AppDir/PotatoEditor \
               -d PotatoEditor.desktop \
