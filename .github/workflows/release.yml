@@ -72,8 +72,11 @@ jobs:
             wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
             chmod +x linuxdeploy*.AppImage
             
-            # Create a valid 128x128 PNG from a Base64 string (Total compatibility)
-            echo "iVBORw0KGgoAAAANSUhEUgAAAIAAAACAAQMAAAD58VeFAAAABlBMVEX/AP////V896fAAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAGklEQVRIie3BMQEAAADCoPVPbQwfoAAAAIC3AQ+AABEqS88/AAAAAElFTkSuQmCC" | base64 -d > icon.png
+            # Write the base64 to a temp file and decode it (Avoids echo mangling)
+            cat <<'EOF' > icon.base64
+            iVBORw0KGgoAAAANSUhEUgAAAIAAAACAAQMAAAD58VeFAAAABlBMVEX/AP////V896fAAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAGklEQVRIie3BMQEAAADCoPVPbQwfoAAAAIC3AQ+AABEqS88/AAAAAElFTkSuQmCC
+            EOF
+            base64 -d icon.base64 > icon.png
             
             mkdir -p AppDir
             cp build/PotatoEditor AppDir/
