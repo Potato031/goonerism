@@ -29,9 +29,9 @@ jobs:
       - name: Package with windeployqt
         run: |
           cd build/Release
-          # This pulls in all the .dll files Windows needs to run Qt
           windeployqt --multimedia video_player.exe
-          # Zip everything up
+          copy "../../styles.qss" "."
+          copy "../../ffmpeg.exe" "."
           Compress-Archive -Path * -DestinationPath ../../video_player_windows.zip
 
       - name: Upload to GitHub Releases
