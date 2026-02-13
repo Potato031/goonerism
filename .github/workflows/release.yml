@@ -30,8 +30,8 @@ jobs:
         run: |
           cd build/Release
           windeployqt --multimedia video_player.exe
-          copy "../../styles.qss" "."
-          copy "../../ffmpeg.exe" "."
+          copy "${{ github.workspace }}/styles.qss" "."
+          copy "${{ github.workspace }}/ffmpeg.exe" "."
           Compress-Archive -Path * -DestinationPath ../../video_player_windows.zip
 
       - name: Upload to GitHub Releases
