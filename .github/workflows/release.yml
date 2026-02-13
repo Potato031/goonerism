@@ -1,4 +1,4 @@
-name: Build Windows Release
+name: Build Multi-Platform Release
 on:
   push:
     tags:
@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
     steps:
       - name: Checkout Code
@@ -26,7 +26,7 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
 
-      - name: Package with windeployqt
+      - name: Package Windows
         run: |
           cd build/Release
           windeployqt --multimedia PotatoEditor.exe
@@ -34,9 +34,65 @@ jobs:
           Get-ChildItem -Path "${{ github.workspace }}" -Filter "ffmpeg.exe" -Recurse | Where-Object { $_.FullName -notlike "*build*" } | Copy-Item -Destination "." -Force
           Compress-Archive -Path * -DestinationPath ../../PotatoEditor_windows.zip
 
-      - name: Upload to GitHub Releases
+      - name: Upload Windows Release
         uses: softprops/action-gh-release@v1
         with:
           files: PotatoEditor_windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libpulse-dev libasound2-dev \
+          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxcb-cursor0
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.6.0'
+          target: 'desktop'
+          modules: 'qtmultimedia'
+
+      - name: Build with CMake
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Package Linux (AppImage)
+        run: |
+          # Download linuxdeploy and the Qt plugin
+          wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+
+          # Create a directory for the AppDir
+          mkdir -p AppDir
+          
+          # Copy the binary and assets
+          cp build/PotatoEditor AppDir/
+          find . -name "styles.qss" -not -path "./build/*" -exec cp {} AppDir/ \;
+          
+          # Set up environment variables for linuxdeploy
+          export OUTPUT="PotatoEditor_linux.AppImage"
+          export VERSION=${{ github.ref_name }}
+          
+          # Run linuxdeploy to bundle everything
+          # Note: We use --appdir and --plugin qt to handle dependencies automatically
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir -e AppDir/PotatoEditor --plugin qt --output appimage
+          
+          # Ensure the file is named correctly for the release upload
+          mv PotatoEditor-*-x86_64.AppImage PotatoEditor_linux.AppImage
+
+      - name: Upload Linux Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: PotatoEditor_linux.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

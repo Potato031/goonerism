@@ -267,43 +267,37 @@ void MainWindow::loadInitialVideo() {
 void MainWindow::checkForUpdates() {
     if (isUpdating) return;
     auto* manager = new QNetworkAccessManager(this);
-
-    // USE THE API ENDPOINT, NOT THE WEB PAGE
     QUrl url("https://api.github.com/repos/Potato031/goonerism/releases/latest");
-
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::UserAgentHeader, "PotatoEditor-Updater");
-
-    // Standard API request headers
     request.setRawHeader("Accept", "application/vnd.github.v3+json");
 
     connect(manager, &QNetworkAccessManager::finished, [this, manager](QNetworkReply *reply) {
         if (reply->error() == QNetworkReply::NoError) {
-            QByteArray response = reply->readAll();
-            QJsonDocument json = QJsonDocument::fromJson(response);
-            QJsonObject obj = json.object();
-
+            QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
             QString latestTag = obj.value("tag_name").toString();
-
-            qDebug() << "Local Version:" << CURRENT_VERSION;
-            qDebug() << "GitHub Version:" << latestTag;
 
             if (!latestTag.isEmpty() && latestTag != CURRENT_VERSION) {
                 QJsonArray assets = obj.value("assets").toArray();
-                if (!assets.isEmpty()) {
-                    QString downloadUrl = assets.at(0).toObject().value("browser_download_url").toString();
+                QString downloadUrl;
 
+                // Identify the correct asset for the OS
+                for (const QJsonValue& asset : assets) {
+                    QString name = asset.toObject().value("name").toString();
+#ifdef Q_OS_WIN
+                    if (name.endsWith(".zip")) downloadUrl = asset.toObject().value("browser_download_url").toString();
+#else
+                    if (name.endsWith(".AppImage")) downloadUrl = asset.toObject().value("browser_download_url").toString();
+#endif
+                }
+
+                if (!downloadUrl.isEmpty()) {
                     auto res = QMessageBox::question(this, "Update Available",
                         "A new version (" + latestTag + ") is available. Update now?",
                         QMessageBox::Yes | QMessageBox::No);
-
-                    if (res == QMessageBox::Yes) {
-                        downloadUpdate(downloadUrl);
-                    }
+                    if (res == QMessageBox::Yes) downloadUpdate(downloadUrl);
                 }
             }
-        } else {
-            qDebug() << "Update check failed:" << reply->errorString();
         }
         reply->deleteLater();
         manager->deleteLater();
@@ -315,28 +309,21 @@ void MainWindow::downloadUpdate(const QString &url) {
     isUpdating = true;
     auto* manager = new QNetworkAccessManager(this);
     QNetworkReply* reply = manager->get(QNetworkRequest(QUrl(url)));
-
     auto* progress = new QProgressDialog("Downloading update...", "Cancel", 0, 100, this);
-    progress->setWindowModality(Qt::WindowModal);
-
-    connect(reply, &QNetworkReply::downloadProgress, [progress](qint64 received, qint64 total) {
-        if (total > 0) progress->setValue(static_cast<int>((received * 100) / total));
-    });
 
     connect(reply, &QNetworkReply::finished, [this, reply, progress, manager]() {
         progress->close();
         if (reply->error() == QNetworkReply::NoError) {
-            QFile file("update.zip");
+#ifdef Q_OS_WIN
+            QString fileName = "update.zip";
+#else
+            QString fileName = "update.AppImage";
+#endif
+            QFile file(fileName);
             if (file.open(QFile::WriteOnly)) {
                 file.write(reply->readAll());
                 file.close();
-
-                // PowerShell command for Windows extraction
-                QProcess* unzip = new QProcess(this);
-                unzip->start("powershell", {"-Command", "Expand-Archive -Path update.zip -DestinationPath temp_update -Force"});
-                connect(unzip, &QProcess::finished, [this]() {
-                    finalizeUpdate();
-                });
+                finalizeUpdate();
             }
         }
         reply->deleteLater();
@@ -345,6 +332,7 @@ void MainWindow::downloadUpdate(const QString &url) {
 }
 
 void MainWindow::finalizeUpdate() {
+#ifdef Q_OS_WIN
     QFile batchFile("update.bat");
     if (batchFile.open(QFile::WriteOnly)) {
         QTextStream out(&batchFile);
@@ -356,32 +344,35 @@ void MainWindow::finalizeUpdate() {
             << "timeout /t 1 /nobreak >nul\n"
             << "tasklist /fi \"imagename eq PotatoEditor.exe\" | find /i \"PotatoEditor.exe\" >nul\n"
             << "if not errorlevel 1 goto loop\n"
-
-            << "echo Preparing update...\n"
-            << "if exist \"temp_update\" rd /s /q \"temp_update\"\n"
-            << "mkdir temp_update\n"
-
-            << "echo Extracting (This may take a moment)...\n"
-            // Silent PowerShell extraction
+            << "echo Extracting...\n"
             << "powershell -windowstyle hidden -command \"Expand-Archive -Path 'update.zip' -DestinationPath 'temp_update' -Force\"\n"
-
-            << "echo Installing new version...\n"
-            << "for /d %%d in (\"temp_update\\*\") do (\n"
-            << "    robocopy \"%%d\" \".\" /S /E /IS /IT /NC /NS /NP /NJH /NJS /MOVE >nul\n"
-            << ")\n"
-            << "robocopy \"temp_update\" \".\" /S /E /IS /IT /NC /NS /NP /NJH /NJS /MOVE >nul\n"
-
-            << "echo Cleaning up...\n"
-            << "timeout /t 1 /nobreak >nul\n"
-            << "if exist \"temp_update\" rd /s /q \"temp_update\"\n"
-            << "if exist \"update.zip\" del /f /q \"update.zip\"\n"
-
-            << "echo Restarting...\n"
+            << "echo Installing...\n"
+            << "for /d %%d in (\"temp_update\\*\") do ( robocopy \"%%d\" \".\" /S /E /MOVE >nul )\n"
+            << "robocopy \"temp_update\" \".\" /S /E /MOVE >nul\n"
+            << "rd /s /q \"temp_update\"\n"
+            << "del /f /q update.zip\n"
             << "start \"\" \"PotatoEditor.exe\"\n"
             << "del \"%~f0\"\n";
         batchFile.close();
-
         QProcess::startDetached("cmd.exe", {"/c", "update.bat"});
         qApp->quit();
     }
+#else
+    QFile shFile("update.sh");
+    if (shFile.open(QFile::WriteOnly)) {
+        QTextStream out(&shFile);
+        out << "#!/bin/bash\n"
+            << "sleep 2\n"
+            << "chmod +x update.AppImage\n"
+            << "mv update.AppImage PotatoEditor_linux.AppImage\n"
+            << "chmod +x PotatoEditor_linux.AppImage\n"
+            << "./PotatoEditor_linux.AppImage &\n"
+            << "rm -- \"$0\"\n";
+        shFile.close();
+
+        QProcess::execute("chmod", {"+x", "update.sh"});
+        QProcess::startDetached("/bin/bash", {"update.sh"});
+        qApp->quit();
+    }
+#endif
 }
