@@ -119,10 +119,8 @@ void MainWindow::setupUi() {
     auto* footerLayout = new QHBoxLayout(footer);
     footerLayout->setContentsMargins(30, 0, 30, 20);
 
-    // Version label in the far left
     auto* versionLabel = new QLabel(CURRENT_VERSION);
     versionLabel->setObjectName("VersionLabel");
-    // Faded white so it doesn't distract from the UI
     versionLabel->setStyleSheet("color: rgba(255, 255, 255, 0.3); font-size: 10px; font-weight: bold;");
 
     volSlider = new QSlider(Qt::Horizontal);
@@ -137,7 +135,6 @@ void MainWindow::setupUi() {
     statusLabel = new QLabel("READY");
     statusLabel->setObjectName("MetaData");
 
-    // Assemble the footer
     footerLayout->addWidget(versionLabel, 0, Qt::AlignBottom);
     footerLayout->addSpacing(15);
     footerLayout->addWidget(new QLabel("VOL"));
@@ -186,17 +183,14 @@ void MainWindow::setupConnections() {
             QTimer::singleShot(100, this, [this, d]() {
                 timeline->setDuration(d);
                 timeline->updateGeometry();
-
                 timeline->forceFitToDuration();
-
                 player->setPosition(0);
                 player->play();
                 timeline->update();
-
-                qDebug() << "Timeline Width during load:" << timeline->width();
             });
         }
     });
+
     connect(timeline, &TimelineWidget::playheadMoved, player, &QMediaPlayer::setPosition);
     connect(timeline, &TimelineWidget::audioTrackChanged, player, &QMediaPlayer::setActiveAudioTrack);
 
@@ -263,9 +257,7 @@ void MainWindow::loadInitialVideo() {
     }
 }
 
-
 void MainWindow::checkForUpdates() {
-    // 1. Strict guard to prevent double windows
     if (isUpdating) return;
 
     auto* manager = new QNetworkAccessManager(this);
@@ -279,7 +271,6 @@ void MainWindow::checkForUpdates() {
             QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
             QString latestTag = obj.value("tag_name").toString();
 
-            // Only proceed if versions don't match AND we aren't already updating
             if (!latestTag.isEmpty() && latestTag != CURRENT_VERSION && !isUpdating) {
                 QJsonArray assets = obj.value("assets").toArray();
                 QString downloadUrl;
@@ -295,13 +286,12 @@ void MainWindow::checkForUpdates() {
 
                 if (!downloadUrl.isEmpty()) {
                     isUpdating = true;
-
                     auto res = QMessageBox::question(this, "Update Available",
                         "A new version (" + latestTag + ") is available. Update now?",
                         QMessageBox::Yes | QMessageBox::No);
 
                     if (res == QMessageBox::Yes) {
-                        if (player) player->pause();
+                        if (player) player->pause(); // Pause video
                         downloadUpdate(downloadUrl);
                     } else {
                         isUpdating = false;
@@ -323,11 +313,19 @@ void MainWindow::downloadUpdate(const QString &url) {
     connect(reply, &QNetworkReply::finished, [this, reply, progress, manager]() {
         progress->close();
         if (reply->error() == QNetworkReply::NoError) {
-            QString appDir = QCoreApplication::applicationDirPath();
-#ifdef Q_OS_WIN
-            QString fileName = appDir + "/update.zip";
+            QString appPath;
+#ifdef Q_OS_LINUX
+            char* envApp = getenv("APPIMAGE");
+            appPath = envApp ? QString::fromLocal8Bit(envApp) : QCoreApplication::applicationFilePath();
 #else
-            QString fileName = appDir + "/update.AppImage";
+            appPath = QCoreApplication::applicationFilePath();
+#endif
+            QString folderDir = QFileInfo(appPath).absolutePath();
+
+#ifdef Q_OS_WIN
+            QString fileName = folderDir + "/update.zip";
+#else
+            QString fileName = folderDir + "/update.AppImage";
 #endif
             QFile file(fileName);
             if (file.open(QFile::WriteOnly)) {
@@ -335,7 +333,7 @@ void MainWindow::downloadUpdate(const QString &url) {
                 file.close();
                 finalizeUpdate();
             } else {
-                QMessageBox::critical(this, "Update Error", "Could not save update file to: " + fileName);
+                QMessageBox::critical(this, "Update Error", "Could not save to: " + fileName);
                 isUpdating = false;
             }
         } else {
@@ -345,52 +343,50 @@ void MainWindow::downloadUpdate(const QString &url) {
         manager->deleteLater();
     });
 
-    // Optional: Connect progress bar
     connect(reply, &QNetworkReply::downloadProgress, [progress](qint64 received, qint64 total) {
         if (total > 0) progress->setValue(static_cast<int>((received * 100) / total));
     });
 }
 
 void MainWindow::finalizeUpdate() {
+    QString appPath;
+#ifdef Q_OS_LINUX
+    char* envApp = getenv("APPIMAGE");
+    appPath = envApp ? QString::fromLocal8Bit(envApp) : QCoreApplication::applicationFilePath();
+#else
+    appPath = QCoreApplication::applicationFilePath();
+#endif
+    QString folderDir = QFileInfo(appPath).absolutePath();
+
 #ifdef Q_OS_WIN
-    QFile batchFile("update.bat");
+    QFile batchFile(folderDir + "/update.bat");
     if (batchFile.open(QFile::WriteOnly)) {
         QTextStream out(&batchFile);
         out << "@echo off\n"
             << "title POTATO UPDATE ENGINE\n"
-            << "echo Waiting for Editor to close...\n"
+            << "timeout /t 1 /nobreak >nul\n"
             << ":loop\n"
             << "taskkill /f /im PotatoEditor.exe >nul 2>&1\n"
             << "timeout /t 1 /nobreak >nul\n"
-            << "tasklist /fi \"imagename eq PotatoEditor.exe\" | find /i \"PotatoEditor.exe\" >nul\n"
             << "if not errorlevel 1 goto loop\n"
-            << "echo Extracting...\n"
-            << "powershell -windowstyle hidden -command \"Expand-Archive -Path 'update.zip' -DestinationPath 'temp_update' -Force\"\n"
-            << "echo Installing...\n"
-            << "for /d %%d in (\"temp_update\\*\") do ( robocopy \"%%d\" \".\" /S /E /MOVE >nul )\n"
-            << "robocopy \"temp_update\" \".\" /S /E /MOVE >nul\n"
-            << "rd /s /q \"temp_update\"\n"
-            << "del /f /q update.zip\n"
-            << "start \"\" \"PotatoEditor.exe\"\n"
+            << "powershell -windowstyle hidden -command \"Expand-Archive -Path '" << folderDir << "/update.zip' -DestinationPath '" << folderDir << "/temp_update' -Force\"\n"
+            << "robocopy \"" << folderDir << "/temp_update\" \"" << folderDir << "\" /S /E /MOVE >nul\n"
+            << "rd /s /q \"" << folderDir << "/temp_update\"\n"
+            << "del /f /q \"" << folderDir << "/update.zip\"\n"
+            << "start \"\" \"" << folderDir << "/PotatoEditor.exe\"\n"
             << "del \"%~f0\"\n";
         batchFile.close();
-        QProcess::startDetached("cmd.exe", {"/c", "update.bat"});
+        QProcess::startDetached("cmd.exe", {"/c", folderDir + "/update.bat"});
         qApp->quit();
     }
 #else
-    // Get the absolute path to the folder where the current AppImage is located
-    QString appDir = QCoreApplication::applicationDirPath();
-    QString shPath = appDir + "/update.sh";
-    QString oldAppPath = appDir + "/PotatoEditor_linux.AppImage";
-    QString newAppPath = appDir + "/update.AppImage";
-
+    QString shPath = folderDir + "/update.sh";
     QFile shFile(shPath);
     if (shFile.open(QFile::WriteOnly)) {
         QTextStream out(&shFile);
         out << "#!/bin/bash\n"
             << "sleep 2\n"
-            // Change directory to where the AppImage actually lives
-            << "cd \"" << appDir << "\"\n"
+            << "cd \"" << folderDir << "\"\n"
             << "chmod +x update.AppImage\n"
             << "mv update.AppImage PotatoEditor_linux.AppImage\n"
             << "chmod +x PotatoEditor_linux.AppImage\n"
