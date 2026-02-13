@@ -113,10 +113,17 @@ void MainWindow::setupUi() {
     workspaceLayout->addWidget(timeline);
     mainLayout->addWidget(workspace);
 
+    // --- FOOTER SECTION ---
     auto* footer = new QFrame();
     footer->setFixedHeight(100);
     auto* footerLayout = new QHBoxLayout(footer);
     footerLayout->setContentsMargins(30, 0, 30, 20);
+
+    // Version label in the far left
+    auto* versionLabel = new QLabel(CURRENT_VERSION);
+    versionLabel->setObjectName("VersionLabel");
+    // Faded white so it doesn't distract from the UI
+    versionLabel->setStyleSheet("color: rgba(255, 255, 255, 0.3); font-size: 10px; font-weight: bold;");
 
     volSlider = new QSlider(Qt::Horizontal);
     volSlider->setRange(0, 100);
@@ -130,6 +137,9 @@ void MainWindow::setupUi() {
     statusLabel = new QLabel("READY");
     statusLabel->setObjectName("MetaData");
 
+    // Assemble the footer
+    footerLayout->addWidget(versionLabel, 0, Qt::AlignBottom);
+    footerLayout->addSpacing(15);
     footerLayout->addWidget(new QLabel("VOL"));
     footerLayout->addWidget(volSlider);
     footerLayout->addStretch();
@@ -274,7 +284,6 @@ void MainWindow::checkForUpdates() {
 
             QString latestTag = obj.value("tag_name").toString();
 
-            // Debug print so you can see if it's working in the console
             qDebug() << "Local Version:" << CURRENT_VERSION;
             qDebug() << "GitHub Version:" << latestTag;
 
