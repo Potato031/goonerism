@@ -72,7 +72,7 @@ jobs:
             wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
             chmod +x linuxdeploy*.AppImage
             
-            # DOWNLOAD a real, valid 128x128 PNG to avoid CRC corruption errors
+            # Download valid icon
             wget -O icon.png https://github.com/github.png?size=128
             
             mkdir -p AppDir
@@ -90,15 +90,13 @@ jobs:
             export LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
             export LDAI_OUTPUT="PotatoEditor_linux.AppImage"
             
-            # Run linuxdeploy
+            # Run linuxdeploy (This creates PotatoEditor_linux.AppImage directly)
             ./linuxdeploy-x86_64.AppImage --appdir AppDir \
               -e AppDir/PotatoEditor \
               -d PotatoEditor.desktop \
               -i icon.png \
               --plugin qt \
               --output appimage
-            
-            mv PotatoEditor-*-x86_64.AppImage PotatoEditor_linux.AppImage
       - name: Upload Linux Release
         uses: softprops/action-gh-release@v1
         with:
