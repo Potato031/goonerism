@@ -72,13 +72,13 @@ jobs:
             wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
             chmod +x linuxdeploy*.AppImage
             
+            # Generate a 128x128 placeholder icon using ImageMagick
+            # This is a standard resolution that linuxdeploy will accept
+            convert -size 128x128 xc:blue icon.png
+            
             mkdir -p AppDir
             cp build/PotatoEditor AppDir/
             find . -name "styles.qss" -not -path "./build/*" -exec cp {} AppDir/ \;
-            
-            # Generate a tiny 1x1 valid PNG icon using a base64 string
-            # This avoids resolution and "missing file" errors
-            echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" | base64 -d > icon.png
             
             # Create .desktop file
             echo "[Desktop Entry]" > PotatoEditor.desktop
