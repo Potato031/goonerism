@@ -13,7 +13,8 @@ find_package(Qt6 REQUIRED COMPONENTS
         MultimediaWidgets
 )
 
-add_executable(video_player src/Main/main.cpp
+add_executable(video_player
+        src/Main/main.cpp
         src/Includes/timelinewidget.h
         src/Main/timelinewidget.cpp
         src/Main/borderlesswindow.cpp
@@ -31,6 +32,10 @@ add_executable(video_player src/Main/main.cpp
         src/Includes/resizeFilter.h
         src/Includes/mainWindow.h
 )
+
+if(WIN32)
+    set_target_properties(video_player PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
 
 target_link_libraries(video_player
         Qt6::Widgets

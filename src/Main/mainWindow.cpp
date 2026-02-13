@@ -237,12 +237,10 @@ void MainWindow::loadInitialVideo() {
     }
 }
 
-// --- NEW UPDATER FUNCTIONS ---
 
 void MainWindow::checkForUpdates() {
     auto* manager = new QNetworkAccessManager(this);
-    // Remember to replace YOUR_USERNAME/YOUR_REPO with your actual info
-    QUrl url("https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/releases/latest");
+    QUrl url("https://github.com/Potato031/goonerism/releases/tag/latest");
 
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::UserAgentHeader, "PotatoEditor-Updater");
@@ -252,7 +250,6 @@ void MainWindow::checkForUpdates() {
             QJsonDocument json = QJsonDocument::fromJson(reply->readAll());
             QString latestTag = json.object().value("tag_name").toString();
 
-            // CURRENT_VERSION should be defined in your header or as a constant
             if (latestTag != CURRENT_VERSION) {
                 auto assets = json.object().value("assets").toArray();
                 if (!assets.isEmpty()) {

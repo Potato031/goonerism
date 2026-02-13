@@ -30,8 +30,8 @@ jobs:
         run: |
           cd build/Release
           windeployqt --multimedia video_player.exe
-          Get-ChildItem -Path "${{ github.workspace }}" -Filter "styles.qss" -Recurse | Copy-Item -Destination "."
-          Get-ChildItem -Path "${{ github.workspace }}" -Filter "ffmpeg.exe" -Recurse | Copy-Item -Destination "."
+          Get-ChildItem -Path "${{ github.workspace }}" -Filter "styles.qss" -Recurse | Where-Object { $_.FullName -notlike "*build*" } | Copy-Item -Destination "." -Force
+          Get-ChildItem -Path "${{ github.workspace }}" -Filter "ffmpeg.exe" -Recurse | Where-Object { $_.FullName -notlike "*build*" } | Copy-Item -Destination "." -Force
           Compress-Archive -Path * -DestinationPath ../../video_player_windows.zip
 
       - name: Upload to GitHub Releases
