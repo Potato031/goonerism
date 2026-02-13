@@ -24,7 +24,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     MainWindow(QWidget *parent = nullptr);
-    const QString CURRENT_VERSION = "v1.0.5"; // Update this per release
+    const QString CURRENT_VERSION = "v1.0.6"; // Update this per release
     void downloadUpdate(const QString &url);
     void finalizeUpdate();
     void checkForUpdates();
@@ -46,7 +46,7 @@ private:
     VideoWithCropWidget* videoWithCrop;
     QMediaPlayer* player;
     QAudioOutput* audio;
-
+    bool isUpdating = false;
     QPushButton* playPauseBtn;
     QLabel* statusLabel;
     QSlider* volSlider;

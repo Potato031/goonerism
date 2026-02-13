@@ -265,6 +265,7 @@ void MainWindow::loadInitialVideo() {
 
 
 void MainWindow::checkForUpdates() {
+    if (isUpdating) return;
     auto* manager = new QNetworkAccessManager(this);
 
     // USE THE API ENDPOINT, NOT THE WEB PAGE
@@ -311,6 +312,7 @@ void MainWindow::checkForUpdates() {
 }
 
 void MainWindow::downloadUpdate(const QString &url) {
+    isUpdating = true;
     auto* manager = new QNetworkAccessManager(this);
     QNetworkReply* reply = manager->get(QNetworkRequest(QUrl(url)));
 
@@ -347,11 +349,20 @@ void MainWindow::finalizeUpdate() {
     if (batchFile.open(QFile::WriteOnly)) {
         QTextStream out(&batchFile);
         out << "@echo off\n"
-            << "timeout /t 1 /nobreak > nul\n"
-            << "taskkill /f /im PotatoEditor.exe > nul 2>&1\n"
+            << "title POTATO UPDATE ENGINE\n"
+            << "echo Waiting for Editor to close...\n"
+            << ":loop\n"
+            << "taskkill /f /im PotatoEditor.exe >nul 2>&1\n"
+            << "timeout /t 1 /nobreak >nul\n"
+            << "tasklist /fi \"imagename eq PotatoEditor.exe\" | find /i \"PotatoEditor.exe\" >nul\n"
+            << "if not errorlevel 1 goto loop\n"
+
+            << "echo Installing files...\n"
             << "xcopy /s /y \"temp_update\\*\" \".\\\"\n"
+            << "echo Cleaning up...\n"
             << "rd /s /q \"temp_update\"\n"
             << "del update.zip\n"
+            << "echo Restarting...\n"
             << "start PotatoEditor.exe\n"
             << "del \"%~f0\"\n";
         batchFile.close();
