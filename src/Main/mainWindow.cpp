@@ -27,6 +27,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     DropFilter* filter = new DropFilter(player, timeline, statusLabel);
     qApp->installEventFilter(filter);
     setupConnections();
+    checkForUpdates();
     loadInitialVideo();
 }
 
@@ -170,15 +171,12 @@ void MainWindow::setupConnections() {
 
     connect(player, &QMediaPlayer::durationChanged, [this](qint64 d) {
         if (d > 0) {
-            // 1. Force the main window to process all pending layout changes
             QApplication::processEvents();
 
-            // 2. Use a tiny delay to ensure the widget width() is accurate
             QTimer::singleShot(100, this, [this, d]() {
                 timeline->setDuration(d);
                 timeline->updateGeometry();
 
-                // 3. Reset the view to fit the now-accurate width
                 timeline->forceFitToDuration();
 
                 player->setPosition(0);

@@ -13,7 +13,7 @@ find_package(Qt6 REQUIRED COMPONENTS
         MultimediaWidgets
 )
 
-add_executable(video_player
+add_executable(PotatoEditor
         src/Main/main.cpp
         src/Includes/timelinewidget.h
         src/Main/timelinewidget.cpp
@@ -34,10 +34,10 @@ add_executable(video_player
 )
 
 if(WIN32)
-    set_target_properties(video_player PROPERTIES WIN32_EXECUTABLE TRUE)
+    set_target_properties(PotatoEditor PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
-target_link_libraries(video_player
+target_link_libraries(PotatoEditor
         Qt6::Widgets
         Qt6::Multimedia
         Qt6::MultimediaWidgets
