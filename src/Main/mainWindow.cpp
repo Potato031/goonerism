@@ -265,7 +265,9 @@ void MainWindow::loadInitialVideo() {
 
 
 void MainWindow::checkForUpdates() {
+    // 1. Strict guard to prevent double windows
     if (isUpdating) return;
+
     auto* manager = new QNetworkAccessManager(this);
     QUrl url("https://api.github.com/repos/Potato031/goonerism/releases/latest");
     QNetworkRequest request(url);
@@ -277,11 +279,11 @@ void MainWindow::checkForUpdates() {
             QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
             QString latestTag = obj.value("tag_name").toString();
 
-            if (!latestTag.isEmpty() && latestTag != CURRENT_VERSION) {
+            // Only proceed if versions don't match AND we aren't already updating
+            if (!latestTag.isEmpty() && latestTag != CURRENT_VERSION && !isUpdating) {
                 QJsonArray assets = obj.value("assets").toArray();
                 QString downloadUrl;
 
-                // Identify the correct asset for the OS
                 for (const QJsonValue& asset : assets) {
                     QString name = asset.toObject().value("name").toString();
 #ifdef Q_OS_WIN
@@ -292,10 +294,18 @@ void MainWindow::checkForUpdates() {
                 }
 
                 if (!downloadUrl.isEmpty()) {
+                    isUpdating = true;
+
                     auto res = QMessageBox::question(this, "Update Available",
                         "A new version (" + latestTag + ") is available. Update now?",
                         QMessageBox::Yes | QMessageBox::No);
-                    if (res == QMessageBox::Yes) downloadUpdate(downloadUrl);
+
+                    if (res == QMessageBox::Yes) {
+                        if (player) player->pause();
+                        downloadUpdate(downloadUrl);
+                    } else {
+                        isUpdating = false;
+                    }
                 }
             }
         }
@@ -306,7 +316,6 @@ void MainWindow::checkForUpdates() {
 }
 
 void MainWindow::downloadUpdate(const QString &url) {
-    isUpdating = true;
     auto* manager = new QNetworkAccessManager(this);
     QNetworkReply* reply = manager->get(QNetworkRequest(QUrl(url)));
     auto* progress = new QProgressDialog("Downloading update...", "Cancel", 0, 100, this);
@@ -314,20 +323,31 @@ void MainWindow::downloadUpdate(const QString &url) {
     connect(reply, &QNetworkReply::finished, [this, reply, progress, manager]() {
         progress->close();
         if (reply->error() == QNetworkReply::NoError) {
+            QString appDir = QCoreApplication::applicationDirPath();
 #ifdef Q_OS_WIN
-            QString fileName = "update.zip";
+            QString fileName = appDir + "/update.zip";
 #else
-            QString fileName = "update.AppImage";
+            QString fileName = appDir + "/update.AppImage";
 #endif
             QFile file(fileName);
             if (file.open(QFile::WriteOnly)) {
                 file.write(reply->readAll());
                 file.close();
                 finalizeUpdate();
+            } else {
+                QMessageBox::critical(this, "Update Error", "Could not save update file to: " + fileName);
+                isUpdating = false;
             }
+        } else {
+            isUpdating = false;
         }
         reply->deleteLater();
         manager->deleteLater();
+    });
+
+    // Optional: Connect progress bar
+    connect(reply, &QNetworkReply::downloadProgress, [progress](qint64 received, qint64 total) {
+        if (total > 0) progress->setValue(static_cast<int>((received * 100) / total));
     });
 }
 
@@ -358,11 +378,19 @@ void MainWindow::finalizeUpdate() {
         qApp->quit();
     }
 #else
-    QFile shFile("update.sh");
+    // Get the absolute path to the folder where the current AppImage is located
+    QString appDir = QCoreApplication::applicationDirPath();
+    QString shPath = appDir + "/update.sh";
+    QString oldAppPath = appDir + "/PotatoEditor_linux.AppImage";
+    QString newAppPath = appDir + "/update.AppImage";
+
+    QFile shFile(shPath);
     if (shFile.open(QFile::WriteOnly)) {
         QTextStream out(&shFile);
         out << "#!/bin/bash\n"
             << "sleep 2\n"
+            // Change directory to where the AppImage actually lives
+            << "cd \"" << appDir << "\"\n"
             << "chmod +x update.AppImage\n"
             << "mv update.AppImage PotatoEditor_linux.AppImage\n"
             << "chmod +x PotatoEditor_linux.AppImage\n"
@@ -370,8 +398,8 @@ void MainWindow::finalizeUpdate() {
             << "rm -- \"$0\"\n";
         shFile.close();
 
-        QProcess::execute("chmod", {"+x", "update.sh"});
-        QProcess::startDetached("/bin/bash", {"update.sh"});
+        QProcess::execute("chmod", {"+x", shPath});
+        QProcess::startDetached("/bin/bash", {shPath});
         qApp->quit();
     }
 #endif
