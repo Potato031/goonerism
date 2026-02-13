@@ -119,7 +119,7 @@ public:
     qint64 getStartLimit() const;
 
     qint64 getEndLimit() const;
-
+    void forceFitToDuration();
     void copyTrimmedVideo();
     void copyTrimmedAudio();
     void copyTrimmedGif();
@@ -141,6 +141,8 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+
+
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;

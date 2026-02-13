@@ -197,3 +197,18 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
         painter.drawText(trackRect, Qt::AlignCenter, activeName.toUpper());
     }
 }
+
+void TimelineWidget::forceFitToDuration() {
+    if (durationMs > 0) {
+        this->zoomFactor = 1.0;
+        this->scrollOffset = 0;
+
+        // Ensure the segment is stretched to the max
+        if (!segments.isEmpty()) {
+            segments[0].startMs = 0;
+            segments[0].endMs = durationMs;
+        }
+
+        this->update();
+    }
+}

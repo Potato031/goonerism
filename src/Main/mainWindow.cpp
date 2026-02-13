@@ -18,6 +18,7 @@
 #include <QMessageBox>
 #include <QProcess>
 #include <QProgressDialog>
+#include <QTimer>
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setupUi();
@@ -168,17 +169,26 @@ void MainWindow::setupConnections() {
     });
 
     connect(player, &QMediaPlayer::durationChanged, [this](qint64 d) {
-    if (d > 0) {
-        timeline->setDuration(d);
-        timeline->updateGeometry();
-        timeline->update();
-        player->setPosition(0);
-        player->play();
+        if (d > 0) {
+            // 1. Force the main window to process all pending layout changes
+            QApplication::processEvents();
 
-        qDebug() << "Media Loaded. Duration:" << d << "ms. Starting Autoplay...";
-    }
-});
+            // 2. Use a tiny delay to ensure the widget width() is accurate
+            QTimer::singleShot(100, this, [this, d]() {
+                timeline->setDuration(d);
+                timeline->updateGeometry();
 
+                // 3. Reset the view to fit the now-accurate width
+                timeline->forceFitToDuration();
+
+                player->setPosition(0);
+                player->play();
+                timeline->update();
+
+                qDebug() << "Timeline Width during load:" << timeline->width();
+            });
+        }
+    });
     connect(timeline, &TimelineWidget::playheadMoved, player, &QMediaPlayer::setPosition);
     connect(timeline, &TimelineWidget::audioTrackChanged, player, &QMediaPlayer::setActiveAudioTrack);
 
