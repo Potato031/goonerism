@@ -24,7 +24,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     MainWindow(QWidget *parent = nullptr);
-    const QString CURRENT_VERSION = "v1.0.20";
+    const QString CURRENT_VERSION = "v1.0.21";
     void downloadUpdate(const QString &url);
     void finalizeUpdate();
     void checkForUpdates();
