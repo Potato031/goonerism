@@ -167,12 +167,17 @@ void MainWindow::setupConnections() {
         timeline->update();
     });
 
-    connect(player, &QMediaPlayer::durationChanged, timeline, [this](qint64 d) {
-        if (d > 0) {
-            timeline->setDuration(d);
-            timeline->update();
-        }
-    });
+    connect(player, &QMediaPlayer::durationChanged, [this](qint64 d) {
+    if (d > 0) {
+        timeline->setDuration(d);
+        timeline->updateGeometry();
+        timeline->update();
+        player->setPosition(0);
+        player->play();
+
+        qDebug() << "Media Loaded. Duration:" << d << "ms. Starting Autoplay...";
+    }
+});
 
     connect(timeline, &TimelineWidget::playheadMoved, player, &QMediaPlayer::setPosition);
     connect(timeline, &TimelineWidget::audioTrackChanged, player, &QMediaPlayer::setActiveAudioTrack);
@@ -225,10 +230,6 @@ void MainWindow::importMedia() {
         player->play();
         statusLabel->setText(QFileInfo(file).fileName().toUpper());
     }
-    this->repaint();
-    QApplication::processEvents();
-
-    timeline->setDuration(player->duration());
 }
 
 void MainWindow::loadInitialVideo() {
@@ -240,7 +241,6 @@ void MainWindow::loadInitialVideo() {
         QString newest = fileList.first().absoluteFilePath();
         player->setSource(QUrl::fromLocalFile(newest));
         timeline->setMediaSource(QUrl::fromLocalFile(newest));
-        player->play();
         statusLabel->setText(fileList.first().fileName().toUpper());
     }
 }

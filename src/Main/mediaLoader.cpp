@@ -5,12 +5,13 @@
 void TimelineWidget::setMediaSource(const QUrl &url) {
     currentFileUrl = url;
 
-    // Clear everything to prevent old video data from bleeding into the new one
     thumbnailCache.clear();
     audioSamples.clear();
     undoStack.clear();
     redoStack.clear();
+
     segments.clear();
+    segments.append({0, 100});
 
     maxAmplitude = 0.01f;
     zoomFactor = 1.0;
@@ -21,9 +22,6 @@ void TimelineWidget::setMediaSource(const QUrl &url) {
 
     const QFile file(url.toLocalFile());
     originalFileSize = file.size();
-
-    // We do NOT add a segment here anymore.
-    // We wait for the player to report the actual duration.
 
     thumbPlayer->setSource(url);
     detectAudioTracks(url.toLocalFile());
@@ -37,21 +35,19 @@ void TimelineWidget::setDuration(qint64 duration) {
     if (duration <= 0) return;
 
     this->durationMs = duration;
-
-    // Reset view so the whole video fits the screen width
     this->zoomFactor = 1.0;
     this->scrollOffset = 0;
 
-    // If segments are empty (which they are after setMediaSource),
-    // create the initial clip spanning the full duration.
+    // Stretch the placeholder to the real duration
     if (segments.isEmpty()) {
         segments.append({0, durationMs});
-    } else if (segments.size() == 1) {
-        // If there's only one segment and it's wrong, fix it
+    } else {
+        // Update the first segment to match the real duration
         segments[0].startMs = 0;
         segments[0].endMs = durationMs;
     }
 
+    // Force a layout recalculation and a repaint
     this->updateGeometry();
     this->update();
 }
