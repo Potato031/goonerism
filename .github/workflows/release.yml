@@ -67,45 +67,46 @@ jobs:
 
       - name: Package Linux (AppImage)
         run: |
-            # Download tools
-            wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-            wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-            chmod +x linuxdeploy*.AppImage
-            
-            # Generate a 128x128 PNG using Python (standard on Ubuntu runners)
-            python3 -c "
-            import struct, zlib
-            def make_png(w, h):
-                buf = struct.pack('>I', w) + struct.pack('>I', h) + b'\x08\x02\x00\x00\x00'
-                data = zlib.compress(b'\x00' + b'\xff\x00\x00' * w * h)
-                return b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x0DIHDR' + buf + zlib.crc32(b'IHDR' + buf).to_bytes(4, 'big') + b'\x00\x00\x00' + struct.pack('>I', len(data)) + b'IDAT' + data + zlib.crc32(b'IDAT' + data).to_bytes(4, 'big') + b'\x00\x00\x00\x00IEND\xaeB`\x82'
-            with open('icon.png', 'wb') as f: f.write(make_png(128, 128))
-            "
-            
-            mkdir -p AppDir
-            cp build/PotatoEditor AppDir/
-            find . -name "styles.qss" -not -path "./build/*" -exec cp {} AppDir/ \;
-            
-            # Create .desktop file
-            echo "[Desktop Entry]" > PotatoEditor.desktop
-            echo "Type=Application" >> PotatoEditor.desktop
-            echo "Name=PotatoEditor" >> PotatoEditor.desktop
-            echo "Exec=PotatoEditor" >> PotatoEditor.desktop
-            echo "Icon=icon" >> PotatoEditor.desktop
-            echo "Categories=Development;" >> PotatoEditor.desktop
-            
-            export LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
-            export LDAI_OUTPUT="PotatoEditor_linux.AppImage"
-            
-            # Run linuxdeploy
-            ./linuxdeploy-x86_64.AppImage --appdir AppDir \
-              -e AppDir/PotatoEditor \
-              -d PotatoEditor.desktop \
-              -i icon.png \
-              --plugin qt \
-              --output appimage
-            
-            mv PotatoEditor-*-x86_64.AppImage PotatoEditor_linux.AppImage
+          # Download tools
+          wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+          
+          # Generate a 128x128 PNG using Python (using Heredoc to prevent EOF errors)
+          python3 - <<EOF
+          import struct, zlib
+          def make_png(w, h):
+              buf = struct.pack('>I', w) + struct.pack('>I', h) + b'\x08\x02\x00\x00\x00'
+              data = zlib.compress(b'\x00' + b'\xff\x00\x00' * w * h)
+              return b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x0DIHDR' + buf + zlib.crc32(b'IHDR' + buf).to_bytes(4, 'big') + b'\x00\x00\x00' + struct.pack('>I', len(data)) + b'IDAT' + data + zlib.crc32(b'IDAT' + data).to_bytes(4, 'big') + b'\x00\x00\x00\x00IEND\xaeB`\x82'
+          with open('icon.png', 'wb') as f: f.write(make_png(128, 128))
+          EOF
+          
+          mkdir -p AppDir
+          cp build/PotatoEditor AppDir/
+          find . -name "styles.qss" -not -path "./build/*" -exec cp {} AppDir/ \;
+          
+          # Create .desktop file
+          echo "[Desktop Entry]" > PotatoEditor.desktop
+          echo "Type=Application" >> PotatoEditor.desktop
+          echo "Name=PotatoEditor" >> PotatoEditor.desktop
+          echo "Exec=PotatoEditor" >> PotatoEditor.desktop
+          echo "Icon=icon" >> PotatoEditor.desktop
+          echo "Categories=Development;" >> PotatoEditor.desktop
+          
+          export LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
+          export LDAI_OUTPUT="PotatoEditor_linux.AppImage"
+          
+          # Run linuxdeploy
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir \
+            -e AppDir/PotatoEditor \
+            -d PotatoEditor.desktop \
+            -i icon.png \
+            --plugin qt \
+            --output appimage
+          
+          mv PotatoEditor-*-x86_64.AppImage PotatoEditor_linux.AppImage
+
       - name: Upload Linux Release
         uses: softprops/action-gh-release@v1
         with:
