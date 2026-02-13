@@ -256,18 +256,30 @@ void MainWindow::loadInitialVideo() {
 
 void MainWindow::checkForUpdates() {
     auto* manager = new QNetworkAccessManager(this);
-    QUrl url("https://github.com/Potato031/goonerism/releases/tag/latest");
+
+    // USE THE API ENDPOINT, NOT THE WEB PAGE
+    QUrl url("https://api.github.com/repos/Potato031/goonerism/releases/latest");
 
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::UserAgentHeader, "PotatoEditor-Updater");
 
+    // Standard API request headers
+    request.setRawHeader("Accept", "application/vnd.github.v3+json");
+
     connect(manager, &QNetworkAccessManager::finished, [this, manager](QNetworkReply *reply) {
         if (reply->error() == QNetworkReply::NoError) {
-            QJsonDocument json = QJsonDocument::fromJson(reply->readAll());
-            QString latestTag = json.object().value("tag_name").toString();
+            QByteArray response = reply->readAll();
+            QJsonDocument json = QJsonDocument::fromJson(response);
+            QJsonObject obj = json.object();
 
-            if (latestTag != CURRENT_VERSION) {
-                auto assets = json.object().value("assets").toArray();
+            QString latestTag = obj.value("tag_name").toString();
+
+            // Debug print so you can see if it's working in the console
+            qDebug() << "Local Version:" << CURRENT_VERSION;
+            qDebug() << "GitHub Version:" << latestTag;
+
+            if (!latestTag.isEmpty() && latestTag != CURRENT_VERSION) {
+                QJsonArray assets = obj.value("assets").toArray();
                 if (!assets.isEmpty()) {
                     QString downloadUrl = assets.at(0).toObject().value("browser_download_url").toString();
 
@@ -280,6 +292,8 @@ void MainWindow::checkForUpdates() {
                     }
                 }
             }
+        } else {
+            qDebug() << "Update check failed:" << reply->errorString();
         }
         reply->deleteLater();
         manager->deleteLater();
