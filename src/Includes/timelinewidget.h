@@ -15,6 +15,7 @@
 #include <QSet>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QPushButton>
 #include <QStyle>
 
 class QProcess;
@@ -43,7 +44,6 @@ public:
         inner->addWidget(label);
         inner->addWidget(bar);
         lay->addWidget(bg);
-
         adjustSize();
         QScreen *screen = QGuiApplication::primaryScreen();
         move(screen->availableGeometry().topRight() - QPoint(width() + 20, -20));

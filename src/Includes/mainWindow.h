@@ -35,22 +35,28 @@ private slots:
     void handlePlaybackState(QMediaPlayer::PlaybackState state);
 
 private:
+    bool isVideoFullscreen = false;
     void setupUi();
     void setupConnections();
     void loadInitialVideo();
 
-    QNetworkReply *downloadReply = nullptr;
-
-    // UI Elements
+    // UI Pointers
+    QVBoxLayout* mainLayout;
+    QFrame* toolbar;
+    QFrame* footer;
+    QWidget* timelineTools;
     TimelineWidget* timeline;
+    QFrame* workspace;
     VideoWithCropWidget* videoWithCrop;
-    QMediaPlayer* player;
-    QAudioOutput* audio;
-    bool isUpdating = false;
+    QPushButton* fullscreenBtn;
     QPushButton* playPauseBtn;
     QLabel* statusLabel;
     QSlider* volSlider;
 
+    // Media
+    QMediaPlayer* player;
+    QAudioOutput* audio;
+    bool isUpdating = false;
 };
 
 #endif //SIMPLEVIDEOEDITOR_MAINWINDOW_H

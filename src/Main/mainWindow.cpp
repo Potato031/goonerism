@@ -1,6 +1,7 @@
 #include "../Includes/mainWindow.h"
 #include "../Includes/resizeFilter.h"
 #include "../Includes/dropFilter.h"
+#include "../Includes/timelinewidget.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFileDialog>
@@ -19,15 +20,15 @@
 #include <QProcess>
 #include <QProgressDialog>
 #include <QTimer>
+#include <QGridLayout>
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setupUi();
-
     this->setAcceptDrops(true);
     DropFilter* filter = new DropFilter(player, timeline, statusLabel);
     qApp->installEventFilter(filter);
     setupConnections();
-    checkForUpdates();
+    // checkForUpdates(); // Moved to external as requested
     loadInitialVideo();
 }
 
@@ -36,11 +37,13 @@ void MainWindow::setupUi() {
     centralWidget->setAcceptDrops(true);
     setCentralWidget(centralWidget);
 
-    auto* mainLayout = new QVBoxLayout(centralWidget);
+    // Store mainLayout in member variable to adjust margins during fullscreen
+    mainLayout = new QVBoxLayout(centralWidget);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    auto* toolbar = new QFrame();
+    // --- TOOLBAR ---
+    toolbar = new QFrame();
     toolbar->setFixedHeight(60);
     auto* toolbarLayout = new QHBoxLayout(toolbar);
     toolbarLayout->setContentsMargins(30, 0, 30, 0);
@@ -54,17 +57,13 @@ void MainWindow::setupUi() {
     logoBold->setObjectName("LogoBold");
     auto* logoLight = new QLabel("QUICK ONE");
     logoLight->setObjectName("LogoLight");
-
     logoLayout->addWidget(logoBold);
     logoLayout->addWidget(logoLight);
 
     auto* inputLabel = new QLabel("CLIP NAME:");
     inputLabel->setObjectName("InputLabel");
 
-    auto* exportInput = new QLineEdit();
-    exportInput->setObjectName("ExportNameInput");
-    exportInput->setPlaceholderText("NAME YOUR CLIP...");
-    exportInput->setFixedWidth(250);
+
 
     auto* openBtn = new QPushButton("IMPORT MEDIA");
     openBtn->setCursor(Qt::PointingHandCursor);
@@ -72,22 +71,38 @@ void MainWindow::setupUi() {
     toolbarLayout->addWidget(logoContainer);
     toolbarLayout->addStretch();
     toolbarLayout->addWidget(inputLabel);
-    toolbarLayout->addWidget(exportInput);
     toolbarLayout->addSpacing(20);
     toolbarLayout->addWidget(openBtn);
     mainLayout->addWidget(toolbar);
 
-    auto* workspace = new QFrame();
+    // --- WORKSPACE ---
+    workspace = new QFrame();
     auto* workspaceLayout = new QVBoxLayout(workspace);
     workspaceLayout->setContentsMargins(25, 5, 25, 10);
 
     auto* videoContainer = new QFrame();
     videoContainer->setObjectName("VideoContainer");
     videoContainer->setMinimumHeight(400);
+
+    auto* videoLayout = new QGridLayout(videoContainer);
+    videoLayout->setContentsMargins(0, 0, 0, 0);
+
     videoWithCrop = new VideoWithCropWidget(videoContainer);
     videoContainer->installEventFilter(new ResizeFilter(videoWithCrop));
+    videoLayout->addWidget(videoWithCrop, 0, 0);
 
-    auto* timelineTools = new QWidget();
+    fullscreenBtn = new QPushButton("⛶");
+    fullscreenBtn->setFixedSize(40, 40);
+    fullscreenBtn->setCursor(Qt::PointingHandCursor);
+    fullscreenBtn->setObjectName("FullscreenBtn");
+    fullscreenBtn->setStyleSheet(
+        "QPushButton#FullscreenBtn { background-color: rgba(0, 0, 0, 150); color: white; border-radius: 5px; font-size: 20px; margin: 15px; }"
+        "QPushButton#FullscreenBtn:hover { background-color: #ff3c00; }"
+    );
+    videoLayout->addWidget(fullscreenBtn, 0, 0, Qt::AlignBottom | Qt::AlignRight);
+
+    // --- TIMELINE TOOLS ---
+    timelineTools = new QWidget();
     auto* toolsLayout = new QHBoxLayout(timelineTools);
     toolsLayout->setContentsMargins(0, 10, 0, 5);
 
@@ -114,7 +129,7 @@ void MainWindow::setupUi() {
     mainLayout->addWidget(workspace);
 
     // --- FOOTER SECTION ---
-    auto* footer = new QFrame();
+    footer = new QFrame();
     footer->setFixedHeight(100);
     auto* footerLayout = new QHBoxLayout(footer);
     footerLayout->setContentsMargins(30, 0, 30, 20);
@@ -152,7 +167,6 @@ void MainWindow::setupUi() {
 
     this->setProperty("autoCutBtn", QVariant::fromValue((void*)autoCutBtn));
     this->setProperty("resetBtn", QVariant::fromValue((void*)resetCropBtn));
-    this->setProperty("exportInput", QVariant::fromValue((void*)exportInput));
 
     connect(openBtn, &QPushButton::clicked, this, &MainWindow::importMedia);
 }
@@ -160,6 +174,37 @@ void MainWindow::setupUi() {
 void MainWindow::setupConnections() {
     connect(volSlider, &QSlider::valueChanged, this, &MainWindow::updateVolume);
     connect(timeline, &TimelineWidget::audioGainChanged, this, &MainWindow::updateVolume);
+
+    // --- TRUE FULLSCREEN LOGIC ---
+    connect(fullscreenBtn, &QPushButton::clicked, [this]() {
+        isVideoFullscreen = !isVideoFullscreen;
+
+        // Toggle UI visibility
+        toolbar->setVisible(!isVideoFullscreen);
+        footer->setVisible(!isVideoFullscreen);
+        timelineTools->setVisible(!isVideoFullscreen);
+        timeline->setVisible(!isVideoFullscreen);
+
+        if (isVideoFullscreen) {
+            // Remove workspace padding and trigger OS fullscreen
+            workspace->layout()->setContentsMargins(0, 0, 0, 0);
+            this->showFullScreen();
+            fullscreenBtn->setText("❐");
+        } else {
+            // Restore workspace padding and return to normal window
+            workspace->layout()->setContentsMargins(25, 5, 25, 10);
+            this->showNormal();
+            fullscreenBtn->setText("⛶");
+        }
+    });
+
+    auto* escShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    connect(escShortcut, &QShortcut::activated, [this]() {
+        if (isVideoFullscreen) {
+            // Simply trigger the button logic to exit
+            fullscreenBtn->click();
+        }
+    });
 
     connect(playPauseBtn, &QPushButton::clicked, [this]() {
         if (player->playbackState() == QMediaPlayer::PlayingState) player->pause();
@@ -179,7 +224,6 @@ void MainWindow::setupConnections() {
     connect(player, &QMediaPlayer::durationChanged, [this](qint64 d) {
         if (d > 0) {
             QApplication::processEvents();
-
             QTimer::singleShot(100, this, [this, d]() {
                 timeline->setDuration(d);
                 timeline->updateGeometry();
@@ -212,22 +256,11 @@ void MainWindow::setupConnections() {
         else player->play();
     });
 
-    auto* exportInput = (QLineEdit*)this->property("exportInput").value<void*>();
-    if (exportInput) {
-        connect(exportInput, &QLineEdit::textChanged, [this](const QString &text) {
-            timeline->customExportName = text.trimmed().replace(" ", "_");
-        });
-    }
+
 }
 
 void MainWindow::handlePlaybackState(QMediaPlayer::PlaybackState state) {
-    if (state == QMediaPlayer::PlayingState) {
-        playPauseBtn->setText("PAUSE");
-    } else {
-        playPauseBtn->setText("PLAY");
-    }
-    playPauseBtn->style()->unpolish(playPauseBtn);
-    playPauseBtn->style()->polish(playPauseBtn);
+    playPauseBtn->setText(state == QMediaPlayer::PlayingState ? "PAUSE" : "PLAY");
 }
 
 void MainWindow::updateVolume() {
@@ -235,7 +268,7 @@ void MainWindow::updateVolume() {
 }
 
 void MainWindow::importMedia() {
-    QString file = QFileDialog::getOpenFileName(this, "Import Media", "", "Video Files (*.mp4 *.mkv *.mov *.avi *.webm);;All Files (*.*)");
+    QString file = QFileDialog::getOpenFileName(this, "Import Media", "", "Videos (*.mp4 *.mkv *.mov)");
     if (!file.isEmpty()) {
         player->setSource(QUrl::fromLocalFile(file));
         timeline->setMediaSource(QUrl::fromLocalFile(file));
@@ -248,166 +281,10 @@ void MainWindow::loadInitialVideo() {
     QString videoPath = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
     QDir dir(videoPath);
     QFileInfoList fileList = dir.entryInfoList({"*.mp4", "*.mkv", "*.mov"}, QDir::Files, QDir::Time);
-
     if (!fileList.isEmpty()) {
         QString newest = fileList.first().absoluteFilePath();
         player->setSource(QUrl::fromLocalFile(newest));
         timeline->setMediaSource(QUrl::fromLocalFile(newest));
         statusLabel->setText(fileList.first().fileName().toUpper());
     }
-}
-
-void MainWindow::checkForUpdates() {
-    if (isUpdating) return;
-
-    auto* manager = new QNetworkAccessManager(this);
-    QUrl url("https://api.github.com/repos/Potato031/goonerism/releases/latest");
-    QNetworkRequest request(url);
-    request.setHeader(QNetworkRequest::UserAgentHeader, "PotatoEditor-Updater");
-    request.setRawHeader("Accept", "application/vnd.github.v3+json");
-
-    connect(manager, &QNetworkAccessManager::finished, [this, manager](QNetworkReply *reply) {
-        if (reply->error() == QNetworkReply::NoError) {
-            QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
-            QString latestTag = obj.value("tag_name").toString();
-
-            if (!latestTag.isEmpty() && latestTag != CURRENT_VERSION && !isUpdating) {
-                QJsonArray assets = obj.value("assets").toArray();
-                QString downloadUrl;
-
-                for (const QJsonValue& asset : assets) {
-                    QString name = asset.toObject().value("name").toString();
-#ifdef Q_OS_WIN
-                    if (name.endsWith(".zip")) downloadUrl = asset.toObject().value("browser_download_url").toString();
-#else
-                    if (name.endsWith(".AppImage")) downloadUrl = asset.toObject().value("browser_download_url").toString();
-#endif
-                }
-
-                if (!downloadUrl.isEmpty()) {
-                    isUpdating = true;
-                    auto res = QMessageBox::question(this, "Update Available",
-                        "A new version (" + latestTag + ") is available. Update now?",
-                        QMessageBox::Yes | QMessageBox::No);
-
-                    if (res == QMessageBox::Yes) {
-                        if (player) player->pause(); // Pause video
-                        downloadUpdate(downloadUrl);
-                    } else {
-                        isUpdating = false;
-                    }
-                }
-            }
-        }
-        reply->deleteLater();
-        manager->deleteLater();
-    });
-    manager->get(request);
-}
-
-void MainWindow::downloadUpdate(const QString &url) {
-    auto* manager = new QNetworkAccessManager(this);
-    QNetworkReply* reply = manager->get(QNetworkRequest(QUrl(url)));
-    auto* progress = new QProgressDialog("Downloading update...", "Cancel", 0, 100, this);
-
-    connect(reply, &QNetworkReply::finished, [this, reply, progress, manager]() {
-        progress->close();
-        if (reply->error() == QNetworkReply::NoError) {
-            // --- RESOLVE WRITABLE PATH ---
-            QString appPath;
-#ifdef Q_OS_LINUX
-            char* envApp = getenv("APPIMAGE");
-            appPath = envApp ? QString::fromLocal8Bit(envApp) : QCoreApplication::applicationFilePath();
-#else
-            appPath = QCoreApplication::applicationFilePath();
-#endif
-            QString folderDir = QFileInfo(appPath).absolutePath();
-
-#ifdef Q_OS_WIN
-            QString fileName = folderDir + "/update.zip";
-#else
-            QString fileName = folderDir + "/update.AppImage";
-#endif
-
-            QFile file(fileName);
-            if (file.open(QFile::WriteOnly)) {
-                file.write(reply->readAll());
-                file.close();
-                finalizeUpdate();
-            } else {
-                QMessageBox::critical(this, "Update Error", "Could not save to writable directory: " + fileName);
-                isUpdating = false;
-            }
-        } else {
-            isUpdating = false;
-        }
-        reply->deleteLater();
-        manager->deleteLater();
-    });
-
-    connect(reply, &QNetworkReply::downloadProgress, [progress](qint64 received, qint64 total) {
-        if (total > 0) progress->setValue(static_cast<int>((received * 100) / total));
-    });
-}
-
-void MainWindow::finalizeUpdate() {
-    // --- RESOLVE WRITABLE PATH ---
-    QString appPath;
-#ifdef Q_OS_LINUX
-    char* envApp = getenv("APPIMAGE");
-    appPath = envApp ? QString::fromLocal8Bit(envApp) : QCoreApplication::applicationFilePath();
-#else
-    appPath = QCoreApplication::applicationFilePath();
-#endif
-    QString folderDir = QFileInfo(appPath).absolutePath();
-
-#ifdef Q_OS_WIN
-    QFile batchFile(folderDir + "/update.bat");
-    if (batchFile.open(QFile::WriteOnly)) {
-        QTextStream out(&batchFile);
-        out << "@echo off\n"
-            << "title POTATO UPDATE ENGINE\n"
-            << "echo Waiting for PotatoEditor to exit...\n"
-            << ":loop\n"
-            << "taskkill /f /im PotatoEditor.exe >nul 2>&1\n"
-            << "timeout /t 1 /nobreak >nul\n"
-            // Check if the process is STILL running
-            << "tasklist /fi \"imagename eq PotatoEditor.exe\" | find /i \"PotatoEditor.exe\" >nul\n"
-            // If FIND found the name (Error Level 0), the app is still there, so loop.
-            << "if %errorlevel% equ 0 goto loop\n"
-            << "echo App closed. Extracting update...\n"
-            << "powershell -windowstyle hidden -command \"Expand-Archive -Path '" << folderDir << "/update.zip' -DestinationPath '" << folderDir << "/temp_update' -Force\"\n"
-            << "echo Installing...\n"
-            << "robocopy \"" << folderDir << "/temp_update\" \"" << folderDir << "\" /S /E /MOVE >nul\n"
-            << "rd /s /q \"" << folderDir << "/temp_update\"\n"
-            << "del /f /q \"" << folderDir << "/update.zip\"\n"
-            << "start \"\" \"" << folderDir << "/PotatoEditor.exe\"\n"
-            << "del \"%~f0\"\n";
-        batchFile.close();
-
-        // Use /C to ensure the window stays open if there is an error, or /Q for quiet
-        QProcess::startDetached("cmd.exe", {"/c", folderDir + "/update.bat"});
-        qApp->quit();
-    }
-#else
-    QString shPath = folderDir + "/update.sh";
-    QFile shFile(shPath);
-    if (shFile.open(QFile::WriteOnly)) {
-        QTextStream out(&shFile);
-        out << "#!/bin/bash\n"
-            << "sleep 2\n"
-            << "cd \"" << folderDir << "\"\n"
-            << "chmod +x update.AppImage\n"
-            // Use quotes in case there are spaces in the user's directory name
-            << "mv \"update.AppImage\" \"PotatoEditor_linux.AppImage\"\n"
-            << "chmod +x \"PotatoEditor_linux.AppImage\"\n"
-            << "./\"PotatoEditor_linux.AppImage\" &\n"
-            << "rm -- \"$0\"\n";
-        shFile.close();
-
-        QProcess::execute("chmod", {"+x", shPath});
-        QProcess::startDetached("/bin/bash", {shPath});
-        qApp->quit();
-    }
-#endif
 }
