@@ -28,7 +28,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     DropFilter* filter = new DropFilter(player, timeline, statusLabel);
     qApp->installEventFilter(filter);
     setupConnections();
-    // checkForUpdates(); // Moved to external as requested
+    checkForUpdates(); // Moved to external as requested
     loadInitialVideo();
 }
 
