@@ -25,7 +25,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     MainWindow(QWidget *parent = nullptr);
-    const QString CURRENT_VERSION = "v1.0.28";
+    const QString CURRENT_VERSION = "v1.0.29";
     void downloadUpdate(const QString &url);
     void finalizeUpdate();
     void checkForUpdates();
@@ -55,6 +55,10 @@ private:
     QMediaPlayer* player;
     QAudioOutput* audio;
     bool isUpdating = false;
+    QPushButton *toggleFilterBtn;
+    QPushButton *blurBtn;
+    QPushButton *pixelBtn;
+    QPushButton *solidBtn;
 };
 
 #endif //SIMPLEVIDEOEDITOR_MAINWINDOW_H

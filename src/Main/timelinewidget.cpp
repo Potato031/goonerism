@@ -211,3 +211,4 @@ void TimelineWidget::forceFitToDuration() {
         this->update();
     }
 }
+

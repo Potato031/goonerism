@@ -9,6 +9,7 @@
 #include <QTime>
 
 #include "../Includes/timelinewidget.h"
+#include "../Includes/mediaSource.h"
 
 // Helper to resolve the bundled ffmpeg path
 static QString getFFmpegPath() {
@@ -21,10 +22,41 @@ static QString getFFmpegPath() {
 
 // Helper to get a valid cross-platform export directory
 static QString getExportDir() {
-    // Finds the "Videos" or "Movies" folder on Windows/Linux/macOS
     QString path = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation) + "/Edited";
     QDir().mkpath(path);
     return path;
+}
+
+// Helper to generate the chained filter string for multi-box
+static QString buildFilterChain(int vidW, int vidH, const QList<VideoWithCropWidget::FilterObject>& filterList) {
+    if (filterList.isEmpty()) return "[0:v]copy[filtered];";
+
+    QString chain = "[0:v]";
+    int padCount = 0;
+    for (const auto& obj : filterList) {
+        int absX = qRound(vidW * obj.l) & ~1;
+        int absY = qRound(vidH * obj.t) & ~1;
+        int absW = qRound(vidW * (obj.r - obj.l)) & ~1;
+        int absH = qRound(vidH * (obj.b - obj.t)) & ~1;
+        if (absW <= 0 || absH <= 0) continue;
+
+        QString nextLabel = QString("[f%1]").arg(++padCount);
+        if (obj.mode == 0) { // Blur
+            chain += QString("split[base][mask];[mask]crop=%1:%2:%3:%4,boxblur=20[blur];[base][blur]overlay=%3:%4%5")
+                     .arg(absW).arg(absH).arg(absX).arg(absY).arg(nextLabel);
+        } else if (obj.mode == 1) { // Pixelate
+            chain += QString("split[base][mask];[mask]crop=%1:%2:%3:%4,scale=iw/30:-1,scale=%1:%2:flags=neighbor[px];[base][px]overlay=%3:%4%5")
+                     .arg(absW).arg(absH).arg(absX).arg(absY).arg(nextLabel);
+        } else { // Blackout
+            chain += QString("drawbox=x=%1:y=%2:w=%3:h=%4:color=black:t=fill%5")
+                     .arg(absX).arg(absY).arg(absW).arg(absH).arg(nextLabel);
+        }
+        chain += "; " + (padCount < filterList.size() ? nextLabel : QString(nextLabel + "copy[filtered];"));
+    }
+    if (padCount == 0) return "[0:v]copy[filtered];";
+    if (!chain.endsWith("[filtered];")) chain.replace(QString("[f%1]").arg(padCount), "[filtered]");
+    if (!chain.endsWith(";")) chain += ";";
+    return chain;
 }
 
 void TimelineWidget::copyTrimmedVideo() {
@@ -32,13 +64,19 @@ void TimelineWidget::copyTrimmedVideo() {
 
     int vidW = 1920;
     int vidH = 1080;
+    QList<VideoWithCropWidget::FilterObject> filters;
     const QWidget* topWindow = this->window();
 
-    if (const QObject* videoWidget = topWindow->findChild<QObject*>("VideoContainer")) {
-        const QVariant vW = videoWidget->property("actualWidth");
-        if (QVariant vH = videoWidget->property("actualHeight"); vW.isValid() && vH.isValid()) {
-            vidW = vW.toInt();
-            vidH = vH.toInt();
+    if (const QObject* videoContainer = topWindow->findChild<QObject*>("VideoContainer")) {
+        auto* vwc = videoContainer->findChild<VideoWithCropWidget*>();
+        if (vwc) {
+            filters = vwc->filterObjects;
+            const QVariant vW = vwc->property("actualWidth");
+            const QVariant vH = vwc->property("actualHeight");
+            if (vW.isValid() && vH.isValid()) {
+                vidW = vW.toInt();
+                vidH = vH.toInt();
+            }
         }
     }
 
@@ -51,29 +89,8 @@ void TimelineWidget::copyTrimmedVideo() {
     isExporting = true;
     const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
 
-    const int absX = qRound(vidW * filterL) & ~1;
-    const int absY = qRound(vidH * filterT) & ~1;
-    const int absW = qRound(vidW * (filterR - filterL)) & ~1;
-    const int absH = qRound(vidH * (filterB - filterT)) & ~1;
-
-    QString pF;
-    if (currentFilter == 0) {
-        pF = QString("split[b][m];[m]crop=%1:%2:%3:%4,boxblur=20[bl];[b][bl]overlay=%3:%4")
-             .arg(absW).arg(absH).arg(absX).arg(absY);
-    } else if (currentFilter == 1) { // Pixelate
-        pF = QString("split[b][m];[m]crop=%1:%2:%3:%4,scale=iw/30:-1,scale=%1:%2:flags=neighbor[px];[b][px]overlay=%3:%4")
-             .arg(absW).arg(absH).arg(absX).arg(absY);
-    } else {
-        pF = QString("drawbox=x=%1:y=%2:w=%3:h=%4:color=black:t=fill")
-             .arg(absX).arg(absY).arg(absW).arg(absH);
-    }
-
-    QString filter;
-    if (filterEnabled) {
-        filter += QString("[0:v]%1[filtered];").arg(pF);
-    } else {
-        filter += "[0:v]copy[filtered];";
-    }
+    // Apply the multi-box filter chain
+    QString filter = buildFilterChain(vidW, vidH, filters);
 
     for (int i = 0; i < segments.size(); ++i) {
         double s = (segments[i].startMs / 1000.0) - seekStart;
@@ -102,7 +119,6 @@ void TimelineWidget::copyTrimmedVideo() {
     args << "-filter_complex" << filter;
     args << "-map" << "[outv]" << "-map" << "[outa]";
 
-    // Note: nvenc works on Windows if an NVIDIA GPU is present.
     args << "-c:v" << "h264_nvenc"
          << "-preset" << "p4"
          << "-tune" << "hq"
@@ -136,85 +152,20 @@ void TimelineWidget::copyTrimmedVideo() {
     ffmpeg->start(getFFmpegPath(), args);
 }
 
-void TimelineWidget::copyTrimmedAudio() {
-    if (segments.empty() || isExporting) return;
-
-    const QString outputDir = getExportDir();
-    QString finalPath = outputDir + "/" + generateClippedName("mp3");
-
-    isExporting = true;
-    double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
-
-    QString filter;
-    for (int i = 0; i < segments.size(); ++i) {
-        double s = (segments[i].startMs / 1000.0) - seekStart;
-        double d = (segments[i].endMs - segments[i].startMs) / 1000.0;
-        filter += QString("[0:a:%1]atrim=start=%2:duration=%3,asetpts=PTS-STARTPTS[a%4];")
-                  .arg(currentAudioTrack).arg(qMax(0.0, s)).arg(d).arg(i);
-    }
-
-    for (int i = 0; i < segments.size(); ++i) filter += QString("[a%1]").arg(i);
-    filter += QString("concat=n=%1:v=0:a=1[outa]").arg(segments.size());
-
-    QStringList args;
-    args << "-y" << "-ss" << QString::number(seekStart) << "-i" << QDir::toNativeSeparators(currentFileUrl.toLocalFile())
-         << "-filter_complex" << filter
-         << "-map" << "[outa]"
-         << "-c:a" << "libmp3lame" << "-b:a" << "192k" << "-threads" << "0"
-         << QDir::toNativeSeparators(finalPath);
-
-    auto *ffmpeg = new QProcess(this);
-    showNotification("EXPORTING AUDIO... 🎵");
-
-    connect(ffmpeg, &QProcess::finished, this, [this, finalPath, ffmpeg](int exitCode) {
-        isExporting = false;
-        if (exitCode == 0) {
-            auto *m = new QMimeData();
-            m->setUrls({QUrl::fromLocalFile(finalPath)});
-            QApplication::clipboard()->setMimeData(m);
-            showNotification("AUDIO SAVED & COPIED ✅");
-        } else {
-            showNotification("AUDIO EXPORT FAILED ❌");
-        }
-        ffmpeg->deleteLater();
-    });
-    ffmpeg->start(getFFmpegPath(), args);
-}
-
-void TimelineWidget::copyTrimmedGif() {
-    if (segments.empty()) return;
-
-    const QString outputDir = getExportDir();
-    QString finalPath = outputDir + "/" + generateClippedName("gif");
-
-    const double duration = (segments[0].endMs - segments[0].startMs) / 1000.0;
-    const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0));
-
-    const QString cropFilter = QString("crop=trunc(iw*(%1-%2)/2)*2:trunc(ih*(%3-%4)/2)*2:trunc(iw*%2/2)*2:trunc(ih*%4/2)*2")
-                         .arg(cropRight).arg(cropLeft).arg(cropBottom).arg(cropTop);
-
-    const QString filter = QString("%1,fps=12,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse")
-                     .arg(cropFilter);
-
-    QStringList args;
-    args << "-y" << "-ss" << QString::number(seekStart) << "-t" << QString::number(duration)
-         << "-i" << QDir::toNativeSeparators(currentFileUrl.toLocalFile()) << "-vf" << filter << "-threads" << "0"
-         << QDir::toNativeSeparators(finalPath);
-
-    QProcess *ffmpeg = new QProcess(this);
-    showProgressNotification(ffmpeg, (segments[0].endMs - segments[0].startMs));
-    connect(ffmpeg, &QProcess::finished, this, [this, finalPath, ffmpeg]() {
-        QMimeData *m = new QMimeData();
-        m->setUrls({QUrl::fromLocalFile(finalPath)});
-        QApplication::clipboard()->setMimeData(m);
-        showNotification("GIF COPIED ✅");
-        ffmpeg->deleteLater();
-    });
-    ffmpeg->start(getFFmpegPath(), args);
-}
-
 void TimelineWidget::copyTrimmedVideoMuted() {
     if (segments.empty() || isExporting) return;
+
+    int vidW = 1920, vidH = 1080;
+    QList<VideoWithCropWidget::FilterObject> filters;
+    const QWidget* topWindow = this->window();
+    if (const QObject* videoContainer = topWindow->findChild<QObject*>("VideoContainer")) {
+        auto* vwc = videoContainer->findChild<VideoWithCropWidget*>();
+        if (vwc) {
+            filters = vwc->filterObjects;
+            vidW = vwc->property("actualWidth").toInt();
+            vidH = vwc->property("actualHeight").toInt();
+        }
+    }
 
     QString outputDir = getExportDir();
     QString finalPath = outputDir + "/MUTED_" + generateClippedName("mp4");
@@ -230,11 +181,11 @@ void TimelineWidget::copyTrimmedVideoMuted() {
     isExporting = true;
     const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
 
-    QString filter;
+    QString filter = buildFilterChain(vidW, vidH, filters);
     for (int i = 0; i < segments.size(); ++i) {
         double s = (segments[i].startMs / 1000.0) - seekStart;
         double d = (segments[i].endMs - segments[i].startMs) / 1000.0;
-        filter += QString("[0:v]trim=start=%1:duration=%2,setpts=PTS-STARTPTS[v%3];")
+        filter += QString("[filtered]trim=start=%1:duration=%2,setpts=PTS-STARTPTS[v%3];")
                   .arg(qMax(0.0, s)).arg(d).arg(i);
     }
     for (int i = 0; i < segments.size(); ++i) filter += QString("[v%1]").arg(i);
@@ -278,6 +229,99 @@ void TimelineWidget::copyTrimmedVideoMuted() {
             showNotification("MUTED EXPORT FAILED ❌");
         }
         update();
+        ffmpeg->deleteLater();
+    });
+    ffmpeg->start(getFFmpegPath(), args);
+}
+
+void TimelineWidget::copyTrimmedGif() {
+    if (segments.empty()) return;
+
+    int vidW = 1920, vidH = 1080;
+    QList<VideoWithCropWidget::FilterObject> filters;
+    const QWidget* topWindow = this->window();
+    if (const QObject* videoContainer = topWindow->findChild<QObject*>("VideoContainer")) {
+        auto* vwc = videoContainer->findChild<VideoWithCropWidget*>();
+        if (vwc) {
+            filters = vwc->filterObjects;
+            vidW = vwc->property("actualWidth").toInt();
+            vidH = vwc->property("actualHeight").toInt();
+        }
+    }
+
+    const QString outputDir = getExportDir();
+    QString finalPath = outputDir + "/" + generateClippedName("gif");
+
+    const double duration = (segments[0].endMs - segments[0].startMs) / 1000.0;
+    const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0));
+
+    QString filter = buildFilterChain(vidW, vidH, filters);
+    const QString cropFilter = QString("crop=trunc(iw*(%1-%2)/2)*2:trunc(ih*(%3-%4)/2)*2:trunc(iw*%2/2)*2:trunc(ih*%4/2)*2")
+                         .arg(cropRight).arg(cropLeft).arg(cropBottom).arg(cropTop);
+
+    filter += QString("[filtered]%1,fps=12,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse")
+                     .arg(cropFilter);
+
+    QStringList args;
+    args << "-y" << "-ss" << QString::number(seekStart) << "-t" << QString::number(duration)
+         << "-i" << QDir::toNativeSeparators(currentFileUrl.toLocalFile()) << "-filter_complex" << filter << "-threads" << "0"
+         << QDir::toNativeSeparators(finalPath);
+
+    QProcess *ffmpeg = new QProcess(this);
+    showProgressNotification(ffmpeg, (segments[0].endMs - segments[0].startMs));
+    connect(ffmpeg, &QProcess::finished, this, [this, finalPath, ffmpeg]() {
+        QMimeData *m = new QMimeData();
+        m->setUrls({QUrl::fromLocalFile(finalPath)});
+        QApplication::clipboard()->setMimeData(m);
+        showNotification("GIF COPIED ✅");
+        ffmpeg->deleteLater();
+    });
+    ffmpeg->start(getFFmpegPath(), args);
+}
+
+
+
+
+void TimelineWidget::copyTrimmedAudio() {
+    if (segments.empty() || isExporting) return;
+
+    const QString outputDir = getExportDir();
+    QString finalPath = outputDir + "/" + generateClippedName("mp3");
+
+    isExporting = true;
+    double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
+
+    QString filter;
+    for (int i = 0; i < segments.size(); ++i) {
+        double s = (segments[i].startMs / 1000.0) - seekStart;
+        double d = (segments[i].endMs - segments[i].startMs) / 1000.0;
+        filter += QString("[0:a:%1]atrim=start=%2:duration=%3,asetpts=PTS-STARTPTS[a%4];")
+                  .arg(currentAudioTrack).arg(qMax(0.0, s)).arg(d).arg(i);
+    }
+
+    for (int i = 0; i < segments.size(); ++i) filter += QString("[a%1]").arg(i);
+    filter += QString("concat=n=%1:v=0:a=1[outa]").arg(segments.size());
+
+    QStringList args;
+    args << "-y" << "-ss" << QString::number(seekStart) << "-i" << QDir::toNativeSeparators(currentFileUrl.toLocalFile())
+         << "-filter_complex" << filter
+         << "-map" << "[outa]"
+         << "-c:a" << "libmp3lame" << "-b:a" << "192k" << "-threads" << "0"
+         << QDir::toNativeSeparators(finalPath);
+
+    auto *ffmpeg = new QProcess(this);
+    showNotification("EXPORTING AUDIO... 🎵");
+
+    connect(ffmpeg, &QProcess::finished, this, [this, finalPath, ffmpeg](int exitCode) {
+        isExporting = false;
+        if (exitCode == 0) {
+            auto *m = new QMimeData();
+            m->setUrls({QUrl::fromLocalFile(finalPath)});
+            QApplication::clipboard()->setMimeData(m);
+            showNotification("AUDIO SAVED & COPIED ✅");
+        } else {
+            showNotification("AUDIO EXPORT FAILED ❌");
+        }
         ffmpeg->deleteLater();
     });
     ffmpeg->start(getFFmpegPath(), args);

@@ -71,6 +71,15 @@ public slots:
         cropRight = r;
         update(); // Refresh the EST SIZE badge math
     }
+
+    void updateFilterValues(float t, float b, float l, float r, int mode, bool enabled) {
+        filterT = t;
+        filterB = b;
+        filterL = l;
+        filterR = r;
+        currentFilter = mode;
+        filterEnabled = enabled;
+    }
 public:
     // 1. Move Segment inside the class to fix scoping errors
     struct Segment {

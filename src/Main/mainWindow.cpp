@@ -1,7 +1,5 @@
 #include "../Includes/mainWindow.h"
-
 #include <iostream>
-
 #include "../Includes/resizeFilter.h"
 #include "../Includes/dropFilter.h"
 #include "../Includes/timelinewidget.h"
@@ -40,16 +38,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 void MainWindow::setupUi() {
     auto* centralWidget = new QWidget(this);
     centralWidget->setAcceptDrops(true);
-    // Crucial for letting the background show through
-    centralWidget->setObjectName("centralWidget"); // Match CSS
+    centralWidget->setObjectName("centralWidget");
     setCentralWidget(centralWidget);
 
-    // --- MAIN LAYOUT ---
     mainLayout = new QVBoxLayout(centralWidget);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    // --- TOOLBAR ---
     toolbar = new QFrame();
     toolbar->setFixedHeight(60);
     toolbar->setObjectName("toolbar");
@@ -60,7 +55,6 @@ void MainWindow::setupUi() {
     auto* logoLayout = new QHBoxLayout(logoContainer);
     logoLayout->setContentsMargins(0, 0, 0, 0);
     logoLayout->setSpacing(5);
-
     auto* logoBold = new QLabel("POTATOES");
     logoBold->setObjectName("LogoBold");
     auto* logoLight = new QLabel("QUICK ONE");
@@ -70,7 +64,6 @@ void MainWindow::setupUi() {
 
     auto* inputLabel = new QLabel("CLIP NAME:");
     inputLabel->setObjectName("InputLabel");
-
     exportInput = new QLineEdit();
     exportInput->setObjectName("ExportNameInput");
     exportInput->setPlaceholderText("NAME YOUR CLIP...");
@@ -87,7 +80,6 @@ void MainWindow::setupUi() {
     toolbarLayout->addWidget(openBtn);
     mainLayout->addWidget(toolbar);
 
-    // --- WORKSPACE ---
     workspace = new QFrame();
     workspace->setObjectName("workspace");
     auto* workspaceLayout = new QVBoxLayout(workspace);
@@ -96,7 +88,6 @@ void MainWindow::setupUi() {
     auto* videoContainer = new QFrame();
     videoContainer->setObjectName("VideoContainer");
     videoContainer->setMinimumHeight(400);
-
     auto* videoLayout = new QGridLayout(videoContainer);
     videoLayout->setContentsMargins(0, 0, 0, 0);
 
@@ -108,13 +99,9 @@ void MainWindow::setupUi() {
     fullscreenBtn->setFixedSize(40, 40);
     fullscreenBtn->setCursor(Qt::PointingHandCursor);
     fullscreenBtn->setObjectName("FullscreenBtn");
-    fullscreenBtn->setStyleSheet(
-        "QPushButton#FullscreenBtn { background-color: rgba(0, 0, 0, 150); color: white; border-radius: 5px; font-size: 20px; margin: 15px; }"
-        "QPushButton#FullscreenBtn:hover { background-color: #ff3c00; }"
-    );
+    fullscreenBtn->setStyleSheet("QPushButton#FullscreenBtn { background-color: rgba(0, 0, 0, 150); color: white; border-radius: 5px; font-size: 20px; margin: 15px; } QPushButton#FullscreenBtn:hover { background-color: #ff3c00; }");
     videoLayout->addWidget(fullscreenBtn, 0, 0, Qt::AlignBottom | Qt::AlignRight);
 
-    // --- TIMELINE TOOLS ---
     timelineTools = new QWidget();
     auto* toolsLayout = new QHBoxLayout(timelineTools);
     toolsLayout->setContentsMargins(0, 10, 0, 5);
@@ -127,6 +114,22 @@ void MainWindow::setupUi() {
     resetCropBtn->setProperty("class", "ToolBtn");
     resetCropBtn->setFixedSize(100, 30);
 
+    blurBtn = new QPushButton("SPAWN BLUR");
+    blurBtn->setProperty("class", "ToolBtn");
+    blurBtn->setFixedSize(120, 30);
+
+    pixelBtn = new QPushButton("SPAWN PIXEL");
+    pixelBtn->setProperty("class", "ToolBtn");
+    pixelBtn->setFixedSize(120, 30);
+
+    solidBtn = new QPushButton("SPAWN BLACKOUT");
+    solidBtn->setProperty("class", "ToolBtn");
+    solidBtn->setFixedSize(140, 30);
+
+    toolsLayout->addWidget(blurBtn);
+    toolsLayout->addWidget(pixelBtn);
+    toolsLayout->addWidget(solidBtn);
+    toolsLayout->addSpacing(20);
     toolsLayout->addWidget(autoCutBtn);
     toolsLayout->addWidget(resetCropBtn);
     toolsLayout->addStretch();
@@ -141,7 +144,6 @@ void MainWindow::setupUi() {
     workspaceLayout->addWidget(timeline);
     mainLayout->addWidget(workspace);
 
-    // --- FOOTER SECTION ---
     footer = new QFrame();
     footer->setObjectName("footer");
     footer->setFixedHeight(100);
@@ -182,15 +184,13 @@ void MainWindow::setupUi() {
     this->setProperty("autoCutBtn", QVariant::fromValue((void*)autoCutBtn));
     this->setProperty("resetBtn", QVariant::fromValue((void*)resetCropBtn));
     this->setProperty("exportInput", QVariant::fromValue((void*)exportInput));
-
     connect(openBtn, &QPushButton::clicked, this, &MainWindow::importMedia);
 }
-
-
 
 void MainWindow::setupConnections() {
     connect(volSlider, &QSlider::valueChanged, this, &MainWindow::updateVolume);
     connect(timeline, &TimelineWidget::audioGainChanged, this, &MainWindow::updateVolume);
+    connect(player, &QMediaPlayer::playbackStateChanged, this, &MainWindow::handlePlaybackState);
 
     connect(fullscreenBtn, &QPushButton::clicked, [this]() {
         isVideoFullscreen = !isVideoFullscreen;
@@ -198,7 +198,6 @@ void MainWindow::setupConnections() {
         footer->setVisible(!isVideoFullscreen);
         timelineTools->setVisible(!isVideoFullscreen);
         timeline->setVisible(!isVideoFullscreen);
-
         if (isVideoFullscreen) {
             workspace->layout()->setContentsMargins(0, 0, 0, 0);
             this->showFullScreen();
@@ -208,11 +207,6 @@ void MainWindow::setupConnections() {
             this->showNormal();
             fullscreenBtn->setText("⛶");
         }
-    });
-
-    auto* escShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
-    connect(escShortcut, &QShortcut::activated, [this]() {
-        if (isVideoFullscreen) fullscreenBtn->click();
     });
 
     connect(playPauseBtn, &QPushButton::clicked, [this]() {
@@ -230,6 +224,17 @@ void MainWindow::setupConnections() {
         timeline->update();
     });
 
+    // Spawning logic
+    connect(blurBtn, &QPushButton::clicked, [this]() { videoWithCrop->addFilter(0); });
+    connect(pixelBtn, &QPushButton::clicked, [this]() { videoWithCrop->addFilter(1); });
+    connect(solidBtn, &QPushButton::clicked, [this]() { videoWithCrop->addFilter(2); });
+
+    // Multi-filter export sync
+    connect(videoWithCrop, &VideoWithCropWidget::filtersChanged, [this](QList<VideoWithCropWidget::FilterObject> filters) {
+        // Here you would normally update the timeline's filter list for FFmpeg string building
+        // For now, it keeps the UI in sync
+    });
+
     connect(player, &QMediaPlayer::durationChanged, [this](qint64 d) {
         if (d > 0) {
             QApplication::processEvents();
@@ -244,19 +249,14 @@ void MainWindow::setupConnections() {
         }
     });
 
-    connect(videoWithCrop, &VideoWithCropWidget::cropsChanged,
-            timeline, &TimelineWidget::updateCropValues);
-
+    connect(videoWithCrop, &VideoWithCropWidget::cropsChanged, timeline, &TimelineWidget::updateCropValues);
     connect(timeline, &TimelineWidget::clipTrimmed, [this]() {
-        videoWithCrop->cropT = timeline->cropTop;
-        videoWithCrop->cropB = timeline->cropBottom;
-        videoWithCrop->cropL = timeline->cropLeft;
-        videoWithCrop->cropR = timeline->cropRight;
+        videoWithCrop->cropT = timeline->cropTop; videoWithCrop->cropB = timeline->cropBottom;
+        videoWithCrop->cropL = timeline->cropLeft; videoWithCrop->cropR = timeline->cropRight;
         videoWithCrop->update();
     });
 
     connect(timeline, &TimelineWidget::playheadMoved, player, &QMediaPlayer::setPosition);
-    connect(timeline, &TimelineWidget::audioTrackChanged, player, &QMediaPlayer::setActiveAudioTrack);
 
     auto* autoCutBtn = (QPushButton*)this->property("autoCutBtn").value<void*>();
     if(autoCutBtn) connect(autoCutBtn, &QPushButton::clicked, [this]() { timeline->autoCutSilence(); });
@@ -265,6 +265,7 @@ void MainWindow::setupConnections() {
     if(resetBtn) connect(resetBtn, &QPushButton::clicked, [this]() {
         videoWithCrop->cropT = 0.03f; videoWithCrop->cropB = 0.96f;
         videoWithCrop->cropL = 0.0f; videoWithCrop->cropR = 1.0f;
+        videoWithCrop->filterObjects.clear();
         timeline->cropTop = 0.03f; timeline->cropBottom = 0.96f;
         videoWithCrop->update();
         timeline->update();
@@ -275,7 +276,6 @@ void MainWindow::setupConnections() {
         if (player->playbackState() == QMediaPlayer::PlayingState) player->pause();
         else player->play();
     });
-
 
     if (exportInput) {
         connect(exportInput, &QLineEdit::textChanged, [this](const QString &text) {
