@@ -86,12 +86,15 @@ void TimelineWidget::keyPressEvent(QKeyEvent *event) {
         }
     }
 
+    // Inside keyPressEvent, under the alt + A logic:
     else if (alt && event->key() == Qt::Key_A) {
         if (totalAudioTracks > 1) {
             currentAudioTrack = (currentAudioTrack + 1) % totalAudioTracks;
 
             loadAudioFast(currentFileUrl.toLocalFile());
-            emit audioTrackChanged(currentAudioTrack);
+
+            // Add this specific emission if not already there
+            emit requestAudioTrackChange(currentAudioTrack);
 
             QString name = (currentAudioTrack < trackNames.size())
                            ? trackNames[currentAudioTrack]

@@ -141,7 +141,7 @@ public:
     void copyTrimmedGif();
     void copyTrimmedVideoMuted();
     QString customExportName;
-
+    double getTotalSegmentsDuration();
     QColor m_accentColor = QColor("#3D5AFE"); // Defaults in case QSS fails
     QColor m_secondaryColor = QColor("#FF3232");
     QColor m_backgroundColor = QColor("#080809");
@@ -154,7 +154,7 @@ signals:
     void clipTrimmed();
     void audioGainChanged(float gain);
     void audioTrackChanged(int index);
-
+    void requestAudioTrackChange(int index);
 protected:
     void paintEvent(QPaintEvent* event) override;
 
@@ -220,7 +220,6 @@ private:
         "Chromium + mic", "WEBRTC VoiceEngine + mic", "everything excluding discord"
     };
 
-    double getTotalSegmentsDuration();
     void loadAudioFast(const QString &path);
     void processVideoFrame(const QVideoFrame &frame);
 

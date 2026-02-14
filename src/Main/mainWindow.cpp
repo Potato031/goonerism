@@ -249,6 +249,14 @@ void MainWindow::setupConnections() {
         }
     });
 
+    connect(timeline, &TimelineWidget::requestAudioTrackChange, [this](int trackIndex) {
+    // This is the magic line that changes what you actually hear in the editor
+    player->setActiveAudioTrack(trackIndex);
+
+    // Optional: Log it to ensure it's working
+    qDebug() << "Editor switching to audio track:" << trackIndex;
+});
+
     connect(videoWithCrop, &VideoWithCropWidget::cropsChanged, timeline, &TimelineWidget::updateCropValues);
     connect(timeline, &TimelineWidget::clipTrimmed, [this]() {
         videoWithCrop->cropT = timeline->cropTop; videoWithCrop->cropB = timeline->cropBottom;
