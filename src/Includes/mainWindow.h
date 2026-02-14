@@ -18,6 +18,7 @@
 #include <QNetworkReply>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLineEdit>
 
 
 class MainWindow : public QMainWindow {
@@ -33,14 +34,12 @@ private slots:
     void importMedia();
     void updateVolume();
     void handlePlaybackState(QMediaPlayer::PlaybackState state);
-
 private:
     bool isVideoFullscreen = false;
     void setupUi();
     void setupConnections();
     void loadInitialVideo();
-
-    // UI Pointers
+    QLineEdit* exportInput;
     QVBoxLayout* mainLayout;
     QFrame* toolbar;
     QFrame* footer;
@@ -52,7 +51,6 @@ private:
     QPushButton* playPauseBtn;
     QLabel* statusLabel;
     QSlider* volSlider;
-
     // Media
     QMediaPlayer* player;
     QAudioOutput* audio;

@@ -63,7 +63,14 @@ class TimelineWidget : public QWidget {
    Q_PROPERTY(QColor trackColor MEMBER m_trackColor)
    Q_PROPERTY(QColor waveformColor MEMBER m_waveformColor)
     Q_PROPERTY(QColor trackColor MEMBER m_trackColor) // Add this line!
-
+public slots:
+    void updateCropValues(float t, float b, float l, float r) {
+        cropTop = t;
+        cropBottom = b;
+        cropLeft = l;
+        cropRight = r;
+        update(); // Refresh the EST SIZE badge math
+    }
 public:
     // 1. Move Segment inside the class to fix scoping errors
     struct Segment {
