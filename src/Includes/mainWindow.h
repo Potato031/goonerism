@@ -19,13 +19,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLineEdit>
+#include <QScrollArea>
 
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     MainWindow(QWidget *parent = nullptr);
-    const QString CURRENT_VERSION = "v1.0.30";
+    const QString CURRENT_VERSION = "v1.0.31";
     void downloadUpdate(const QString &url);
     void finalizeUpdate();
     void checkForUpdates();
@@ -59,6 +60,16 @@ private:
     QPushButton *blurBtn;
     QPushButton *pixelBtn;
     QPushButton *solidBtn;
+    QFrame* clipSidebar;
+    QScrollArea* sidebarScroll;
+    QWidget* sidebarContent;
+    QVBoxLayout* sidebarListLayout;
+
+    // --- NEW HELPER FUNCTIONS ---
+    void loadClipDirectly(const QString &filePath);
+    void updateSidebar();
+protected:
+    bool eventFilter(QObject *obj, QEvent *event) override; // RIGHT
 };
 
 #endif //SIMPLEVIDEOEDITOR_MAINWINDOW_H

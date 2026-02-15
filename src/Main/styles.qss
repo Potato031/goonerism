@@ -156,3 +156,29 @@ VideoWithCropWidget {
     qproperty-secondaryColor: #00FA9A;    /* Mint Filter Box */
     qproperty-backgroundColor: #040605;   /* Background Letterboxing */
 }
+
+/* Custom ScrollBar Styling */
+QScrollBar:vertical {
+    border: none;
+    background: #040605; /* Deep Forest Black */
+    width: 6px;          /* Thin scrollbar to save space */
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background: #1D2921; /* Dark Ivy */
+    min-height: 20px;
+    border-radius: 3px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #50C878; /* Emerald on hover */
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px; /* Hide the arrow buttons */
+}
+
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+}

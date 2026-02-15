@@ -3,6 +3,7 @@
 #include "../Includes/resizeFilter.h"
 #include "../Includes/dropFilter.h"
 #include "../Includes/timelinewidget.h"
+#include "../Includes/previewLabel.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFileDialog>
@@ -24,6 +25,8 @@
 #include <QTimer>
 #include <QGridLayout>
 #include <QResizeEvent>
+#include <QDateTime>
+#include <QScrollArea>
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setupUi();
@@ -85,6 +88,39 @@ void MainWindow::setupUi() {
     auto* workspaceLayout = new QVBoxLayout(workspace);
     workspaceLayout->setContentsMargins(25, 5, 25, 10);
 
+    // --- SIDEBAR AND VIDEO HORIZONTAL SECTION ---
+    auto* contentLayout = new QHBoxLayout();
+    contentLayout->setSpacing(15);
+
+    // Sidebar Frame
+    clipSidebar = new QFrame();
+    clipSidebar->setFixedWidth(220);
+    clipSidebar->setObjectName("clipSidebar");
+    clipSidebar->setStyleSheet("QFrame#clipSidebar { background-color: #0d0d0e; border-right: 1px solid #1a1a1c; border-radius: 8px; }");
+
+    auto* sidebarLayout = new QVBoxLayout(clipSidebar);
+    sidebarLayout->setContentsMargins(10, 15, 10, 15);
+
+    QLabel* sideTitle = new QLabel("RECENT CLIPS");
+    sideTitle->setStyleSheet("color: #5c5c5e; font-weight: bold; font-size: 11px; letter-spacing: 1px; margin-bottom: 5px;");
+    sidebarLayout->addWidget(sideTitle);
+
+    sidebarScroll = new QScrollArea();
+    sidebarScroll->setWidgetResizable(true);
+    sidebarScroll->setFrameShape(QFrame::NoFrame);
+    sidebarScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); // Kill horizontal scroll
+    sidebarScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    sidebarScroll->setStyleSheet("background: transparent; border: none;"); // Ensure it's invisible
+
+    sidebarContent = new QWidget();
+    sidebarListLayout = new QVBoxLayout(sidebarContent);
+    sidebarListLayout->setContentsMargins(0, 0, 0, 0);
+    sidebarListLayout->setSpacing(10);
+    sidebarListLayout->addStretch();
+
+    sidebarScroll->setWidget(sidebarContent);
+    sidebarLayout->addWidget(sidebarScroll);
+
     auto* videoContainer = new QFrame();
     videoContainer->setObjectName("VideoContainer");
     videoContainer->setMinimumHeight(400);
@@ -101,6 +137,10 @@ void MainWindow::setupUi() {
     fullscreenBtn->setObjectName("FullscreenBtn");
     fullscreenBtn->setStyleSheet("QPushButton#FullscreenBtn { background-color: rgba(0, 0, 0, 150); color: white; border-radius: 5px; font-size: 20px; margin: 15px; } QPushButton#FullscreenBtn:hover { background-color: #ff3c00; }");
     videoLayout->addWidget(fullscreenBtn, 0, 0, Qt::AlignBottom | Qt::AlignRight);
+
+    contentLayout->addWidget(clipSidebar);
+    contentLayout->addWidget(videoContainer, 1);
+    workspaceLayout->addLayout(contentLayout, 1);
 
     timelineTools = new QWidget();
     auto* toolsLayout = new QHBoxLayout(timelineTools);
@@ -139,7 +179,6 @@ void MainWindow::setupUi() {
     timeline->cropTop = 0.03f;
     timeline->cropBottom = 0.96f;
 
-    workspaceLayout->addWidget(videoContainer, 1);
     workspaceLayout->addWidget(timelineTools);
     workspaceLayout->addWidget(timeline);
     mainLayout->addWidget(workspace);
@@ -198,6 +237,7 @@ void MainWindow::setupConnections() {
         footer->setVisible(!isVideoFullscreen);
         timelineTools->setVisible(!isVideoFullscreen);
         timeline->setVisible(!isVideoFullscreen);
+        clipSidebar->setVisible(!isVideoFullscreen);
         if (isVideoFullscreen) {
             workspace->layout()->setContentsMargins(0, 0, 0, 0);
             this->showFullScreen();
@@ -224,16 +264,9 @@ void MainWindow::setupConnections() {
         timeline->update();
     });
 
-    // Spawning logic
     connect(blurBtn, &QPushButton::clicked, [this]() { videoWithCrop->addFilter(0); });
     connect(pixelBtn, &QPushButton::clicked, [this]() { videoWithCrop->addFilter(1); });
     connect(solidBtn, &QPushButton::clicked, [this]() { videoWithCrop->addFilter(2); });
-
-    // Multi-filter export sync
-    connect(videoWithCrop, &VideoWithCropWidget::filtersChanged, [this](QList<VideoWithCropWidget::FilterObject> filters) {
-        // Here you would normally update the timeline's filter list for FFmpeg string building
-        // For now, it keeps the UI in sync
-    });
 
     connect(player, &QMediaPlayer::durationChanged, [this](qint64 d) {
         if (d > 0) {
@@ -250,12 +283,8 @@ void MainWindow::setupConnections() {
     });
 
     connect(timeline, &TimelineWidget::requestAudioTrackChange, [this](int trackIndex) {
-    // This is the magic line that changes what you actually hear in the editor
-    player->setActiveAudioTrack(trackIndex);
-
-    // Optional: Log it to ensure it's working
-    qDebug() << "Editor switching to audio track:" << trackIndex;
-});
+        player->setActiveAudioTrack(trackIndex);
+    });
 
     connect(videoWithCrop, &VideoWithCropWidget::cropsChanged, timeline, &TimelineWidget::updateCropValues);
     connect(timeline, &TimelineWidget::clipTrimmed, [this]() {
@@ -303,11 +332,102 @@ void MainWindow::updateVolume() {
 void MainWindow::importMedia() {
     QString file = QFileDialog::getOpenFileName(this, "Import Media", "", "Videos (*.mp4 *.mkv *.mov)");
     if (!file.isEmpty()) {
-        player->setSource(QUrl::fromLocalFile(file));
-        timeline->setMediaSource(QUrl::fromLocalFile(file));
-        player->play();
-        statusLabel->setText(QFileInfo(file).fileName().toUpper());
+        loadClipDirectly(file);
     }
+}
+
+void MainWindow::loadClipDirectly(const QString &filePath) {
+    player->setSource(QUrl::fromLocalFile(filePath));
+    timeline->setMediaSource(QUrl::fromLocalFile(filePath));
+    player->play();
+    statusLabel->setText(QFileInfo(filePath).fileName().toUpper());
+    updateSidebar();
+}
+
+void MainWindow::updateSidebar() {
+    // 1. Efficient Cleanup
+    QLayoutItem *child;
+    while ((child = sidebarListLayout->takeAt(0)) != nullptr) {
+        if (child->widget()) child->widget()->deleteLater();
+        delete child;
+    }
+
+    // 2. Fetch Recent Media
+    QString videoPath = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+    QDir dir(videoPath);
+    QFileInfoList fileList = dir.entryInfoList({"*.mp4", "*.mkv", "*.mov"}, QDir::Files, QDir::Time);
+
+    if (fileList.isEmpty()) return;
+
+    // 3. Build List Items
+    for (int i = 0; i < qMin(5, (int)fileList.size()); ++i) {
+        const QFileInfo &info = fileList[i];
+
+        // Container styled via QSS .ToolBtn class
+        QWidget *clipContainer = new QWidget();
+        clipContainer->setObjectName("SidebarItem");
+        clipContainer->setProperty("class", "ToolBtn");
+
+        QHBoxLayout *rowLayout = new QHBoxLayout(clipContainer);
+        rowLayout->setContentsMargins(8, 6, 8, 6);
+        rowLayout->setSpacing(10);
+
+        // Thumbnail matches #VideoContainer style
+        PreviewLabel *preview = new PreviewLabel(info.absoluteFilePath(), clipContainer);
+        preview->setFixedSize(85, 48); // Scaled down for better fit
+        preview->setObjectName("VideoContainer");
+
+        QWidget *textInfo = new QWidget();
+        textInfo->setAttribute(Qt::WA_TranslucentBackground);
+        QVBoxLayout *textLayout = new QVBoxLayout(textInfo);
+        textLayout->setContentsMargins(0, 0, 0, 0);
+        textLayout->setSpacing(1);
+
+        // Name Label (Elided to prevent horizontal scrolling)
+        QLabel *nameLabel = new QLabel();
+        nameLabel->setObjectName("LogoBold");
+        QFontMetrics metrics(nameLabel->font());
+        QString elidedName = metrics.elidedText(info.baseName().toUpper(), Qt::ElideRight, 100);
+        nameLabel->setText(elidedName);
+        nameLabel->setStyleSheet("font-size: 10px; background: transparent;");
+
+        // Meta Label using #MetaData style
+        QString sizeStr = QString::number(info.size() / (1024 * 1024.0), 'f', 1) + "MB";
+        QLabel *metaLabel = new QLabel(QString("%1 • 60S").arg(sizeStr));
+        metaLabel->setObjectName("MetaData");
+        metaLabel->setStyleSheet("background: transparent;");
+
+        textLayout->addWidget(nameLabel);
+        textLayout->addWidget(metaLabel);
+        textLayout->addStretch();
+
+        rowLayout->addWidget(preview);
+        rowLayout->addWidget(textInfo, 1);
+
+        // Setup Interaction
+        clipContainer->setCursor(Qt::PointingHandCursor);
+        clipContainer->installEventFilter(this);
+        clipContainer->setProperty("filePath", info.absoluteFilePath());
+
+        sidebarListLayout->insertWidget(sidebarListLayout->count() > 0 ? sidebarListLayout->count() - 1 : 0, clipContainer);
+    }
+
+    // Ensure stretch exists at the bottom
+    if (sidebarListLayout->count() > 0) {
+        sidebarListLayout->addStretch(1);
+    }
+}
+
+bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
+    // Check if the user clicked one of the recent clip containers
+    if (event->type() == QEvent::MouseButtonPress) {
+        QString path = obj->property("filePath").toString();
+        if (!path.isEmpty()) {
+            loadClipDirectly(path);
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(obj, event);
 }
 
 void MainWindow::loadInitialVideo() {
@@ -315,9 +435,7 @@ void MainWindow::loadInitialVideo() {
     QDir dir(videoPath);
     QFileInfoList fileList = dir.entryInfoList({"*.mp4", "*.mkv", "*.mov"}, QDir::Files, QDir::Time);
     if (!fileList.isEmpty()) {
-        QString newest = fileList.first().absoluteFilePath();
-        player->setSource(QUrl::fromLocalFile(newest));
-        timeline->setMediaSource(QUrl::fromLocalFile(newest));
-        statusLabel->setText(fileList.first().fileName().toUpper());
+        loadClipDirectly(fileList.first().absoluteFilePath());
     }
+    updateSidebar();
 }

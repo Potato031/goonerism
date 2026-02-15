@@ -33,6 +33,8 @@ add_executable(PotatoEditor
         src/Includes/resizeFilter.h
         src/Includes/mainWindow.h
         src/Main/updater.cpp
+        src/Includes/previewLabel.h
+        src/Main/previewLabel.cpp
 )
 
 if(WIN32)

@@ -20,6 +20,14 @@ static QString getFFmpegPath() {
 #endif
 }
 
+// Check if NVIDIA hardware encoding is available on this specific device
+static bool hasNvidiaEncoder() {
+    QProcess probe;
+    probe.start(getFFmpegPath(), {"-encoders"});
+    probe.waitForFinished(2000);
+    return probe.readAllStandardOutput().contains("h264_nvenc");
+}
+
 // Helper to get a valid cross-platform export directory
 static QString getExportDir() {
     QString path = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation) + "/Edited";
@@ -89,7 +97,6 @@ void TimelineWidget::copyTrimmedVideo() {
     isExporting = true;
     const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
 
-    // Apply the multi-box filter chain
     QString filter = buildFilterChain(vidW, vidH, filters);
 
     for (int i = 0; i < segments.size(); ++i) {
@@ -111,7 +118,6 @@ void TimelineWidget::copyTrimmedVideo() {
     double targetSizeBytes = 6.7 * 1024 * 1024;
     double audioBitrateBps = 32000;
     double availableVideoBitsPerSec = (targetSizeBytes * 8 / durationSec) - audioBitrateBps;
-
     int videoBitrateKbps = qBound(200, static_cast<int>(availableVideoBitsPerSec / 1000), 12000);
 
     QStringList args;
@@ -119,17 +125,18 @@ void TimelineWidget::copyTrimmedVideo() {
     args << "-filter_complex" << filter;
     args << "-map" << "[outv]" << "-map" << "[outa]";
 
-    args << "-c:v" << "h264_nvenc"
-         << "-preset" << "p4"
-         << "-tune" << "hq"
-         << "-pix_fmt" << "yuv420p"
-         << "-rc" << "vbr"
+    if (hasNvidiaEncoder()) {
+        args << "-c:v" << "h264_nvenc" << "-preset" << "p4" << "-tune" << "hq" << "-rc" << "vbr";
+    } else {
+        args << "-c:v" << "libx264" << "-preset" << "faster";
+    }
+
+    args << "-pix_fmt" << "yuv420p"
          << "-b:v" << QString("%1k").arg(videoBitrateKbps)
          << "-maxrate" << QString("%1k").arg(static_cast<int>(videoBitrateKbps * 1.1))
          << "-bufsize" << QString("%1k").arg(videoBitrateKbps * 2);
 
     args << "-c:a" << "aac" << "-b:a" << "32k" << "-ac" << "1";
-
     args << "-progress" << "pipe:1" << QDir::toNativeSeparators(finalPath);
 
     auto *ffmpeg = new QProcess(this);
@@ -199,18 +206,23 @@ void TimelineWidget::copyTrimmedVideoMuted() {
     args << "-y" << "-ss" << QString::number(seekStart) << "-i" << QDir::toNativeSeparators(currentFileUrl.toLocalFile())
          << "-filter_complex" << filter
          << "-map" << "[outv]"
-         << "-an"
-         << "-c:v" << "h264_nvenc"
-         << "-preset" << "p1"
-         << "-tune" << "ull"
-         << "-zerolatency" << "1"
-         << "-pix_fmt" << "yuv420p";
+         << "-an";
+
+    bool nv = hasNvidiaEncoder();
+    if (nv) {
+        args << "-c:v" << "h264_nvenc" << "-preset" << "p1" << "-tune" << "ull" << "-zerolatency" << "1";
+    } else {
+        args << "-c:v" << "libx264" << "-preset" << "ultrafast" << "-tune" << "zerolatency";
+    }
+
+    args << "-pix_fmt" << "yuv420p";
 
     if (estMb > 8.0) {
         int videoBitrateKbps = qBound(200, static_cast<int>((7.5 * 8192) / durationSec), 15000);
         args << "-r" << "25" << "-b:v" << QString("%1k").arg(videoBitrateKbps);
     } else {
-        args << "-rc" << "constqp" << "-qp" << "23";
+        if (nv) args << "-rc" << "constqp" << "-qp" << "23";
+        else args << "-crf" << "23";
     }
 
     args << "-progress" << "pipe:1" << QDir::toNativeSeparators(finalPath);
@@ -278,9 +290,6 @@ void TimelineWidget::copyTrimmedGif() {
     });
     ffmpeg->start(getFFmpegPath(), args);
 }
-
-
-
 
 void TimelineWidget::copyTrimmedAudio() {
     if (segments.empty() || isExporting) return;
