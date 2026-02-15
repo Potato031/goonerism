@@ -35,38 +35,38 @@ static QString getExportDir() {
 static QString buildFilterChain(int vidW, int vidH, const QList<VideoWithCropWidget::FilterObject>& filterList) {
     if (filterList.isEmpty()) return "[0:v]null[filtered];";
 
-    // We start with the input stream
-    QString chain = "[0:v]";
+    QString chain;
+    // The very first input is the raw video
+    QString lastOutput = "[0:v]";
 
     for (int i = 0; i < filterList.size(); ++i) {
         const auto& obj = filterList[i];
 
+        // Ensure even dimensions for YUV pixel formats
         int absX = qRound(vidW * obj.l) & ~1;
         int absY = qRound(vidH * obj.t) & ~1;
         int absW = qRound(vidW * (obj.r - obj.l)) & ~1;
         int absH = qRound(vidH * (obj.b - obj.t)) & ~1;
-
         if (absW <= 0 || absH <= 0) continue;
 
+        QString currentStepLabel = QString("[v_step%1]").arg(i);
 
         if (obj.mode == 0) { // Blur
-            chain += QString("split[base][mask];[mask]crop=%1:%2:%3:%4,boxblur=20[blur];[base][blur]overlay=%3:%4")
-                     .arg(absW).arg(absH).arg(absX).arg(absY);
+            chain += QString("%1split[base][mask];[mask]crop=%2:%3:%4:%5,boxblur=20[blur];[base][blur]overlay=%4:%5%6; ")
+                     .arg(lastOutput).arg(absW).arg(absH).arg(absX).arg(absY).arg(currentStepLabel);
         } else if (obj.mode == 1) { // Pixelate
-            chain += QString("split[base][mask];[mask]crop=%1:%2:%3:%4,scale=iw/30:-1,scale=%1:%2:flags=neighbor[px];[base][px]overlay=%3:%4")
-                     .arg(absW).arg(absH).arg(absX).arg(absY);
+            chain += QString("%1split[base][mask];[mask]crop=%2:%3:%4:%5,scale=iw/30:-1,scale=%2:%3:flags=neighbor[px];[base][px]overlay=%4:%5%6; ")
+                     .arg(lastOutput).arg(absW).arg(absH).arg(absX).arg(absY).arg(currentStepLabel);
         } else { // Blackout
-            chain += QString("drawbox=x=%1:y=%2:w=%3:h=%4:color=black:t=fill")
-                     .arg(absX).arg(absY).arg(absW).arg(absH);
+            chain += QString("%1drawbox=x=%2:y=%3:w=%4:h=%5:color=black:t=fill%6; ")
+                     .arg(lastOutput).arg(absX).arg(absY).arg(absW).arg(absH).arg(currentStepLabel);
         }
 
-        if (i < filterList.size() - 1) {
-            QString nextLabel = QString("[v_tmp%1]").arg(i);
-            chain += nextLabel + "; " + nextLabel;
-        }
+        // The output of THIS filter becomes the input for the NEXT filter
+        lastOutput = currentStepLabel;
     }
 
-    chain += "[filtered];";
+    chain += lastOutput + "copy[filtered];";
     return chain;
 }
 
@@ -158,7 +158,7 @@ void TimelineWidget::copyTrimmedVideo() {
         update();
         ffmpeg->deleteLater();
     });
-
+    qDebug() << "FFmpeg Args:" << args.join(" ");
     ffmpeg->start(getFFmpegPath(), args);
 }
 
