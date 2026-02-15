@@ -11,7 +11,6 @@
 #include "../Includes/timelinewidget.h"
 #include "../Includes/mediaSource.h"
 
-// Helper to resolve the bundled ffmpeg path
 static QString getFFmpegPath() {
 #ifdef Q_OS_WIN
     return QCoreApplication::applicationDirPath() + "/ffmpeg.exe";
@@ -20,7 +19,6 @@ static QString getFFmpegPath() {
 #endif
 }
 
-// Check if NVIDIA hardware encoding is available on this specific device
 static bool hasNvidiaEncoder() {
     QProcess probe;
     probe.start(getFFmpegPath(), {"-encoders"});
@@ -28,42 +26,47 @@ static bool hasNvidiaEncoder() {
     return probe.readAllStandardOutput().contains("h264_nvenc");
 }
 
-// Helper to get a valid cross-platform export directory
 static QString getExportDir() {
     QString path = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation) + "/Edited";
     QDir().mkpath(path);
     return path;
 }
 
-// Helper to generate the chained filter string for multi-box
 static QString buildFilterChain(int vidW, int vidH, const QList<VideoWithCropWidget::FilterObject>& filterList) {
-    if (filterList.isEmpty()) return "[0:v]copy[filtered];";
+    if (filterList.isEmpty()) return "[0:v]null[filtered];";
 
+    // We start with the input stream
     QString chain = "[0:v]";
-    int padCount = 0;
-    for (const auto& obj : filterList) {
+
+    for (int i = 0; i < filterList.size(); ++i) {
+        const auto& obj = filterList[i];
+
         int absX = qRound(vidW * obj.l) & ~1;
         int absY = qRound(vidH * obj.t) & ~1;
         int absW = qRound(vidW * (obj.r - obj.l)) & ~1;
         int absH = qRound(vidH * (obj.b - obj.t)) & ~1;
+
         if (absW <= 0 || absH <= 0) continue;
 
-        QString nextLabel = QString("[f%1]").arg(++padCount);
+
         if (obj.mode == 0) { // Blur
-            chain += QString("split[base][mask];[mask]crop=%1:%2:%3:%4,boxblur=20[blur];[base][blur]overlay=%3:%4%5")
-                     .arg(absW).arg(absH).arg(absX).arg(absY).arg(nextLabel);
+            chain += QString("split[base][mask];[mask]crop=%1:%2:%3:%4,boxblur=20[blur];[base][blur]overlay=%3:%4")
+                     .arg(absW).arg(absH).arg(absX).arg(absY);
         } else if (obj.mode == 1) { // Pixelate
-            chain += QString("split[base][mask];[mask]crop=%1:%2:%3:%4,scale=iw/30:-1,scale=%1:%2:flags=neighbor[px];[base][px]overlay=%3:%4%5")
-                     .arg(absW).arg(absH).arg(absX).arg(absY).arg(nextLabel);
+            chain += QString("split[base][mask];[mask]crop=%1:%2:%3:%4,scale=iw/30:-1,scale=%1:%2:flags=neighbor[px];[base][px]overlay=%3:%4")
+                     .arg(absW).arg(absH).arg(absX).arg(absY);
         } else { // Blackout
-            chain += QString("drawbox=x=%1:y=%2:w=%3:h=%4:color=black:t=fill%5")
-                     .arg(absX).arg(absY).arg(absW).arg(absH).arg(nextLabel);
+            chain += QString("drawbox=x=%1:y=%2:w=%3:h=%4:color=black:t=fill")
+                     .arg(absX).arg(absY).arg(absW).arg(absH);
         }
-        chain += "; " + (padCount < filterList.size() ? nextLabel : QString(nextLabel + "copy[filtered];"));
+
+        if (i < filterList.size() - 1) {
+            QString nextLabel = QString("[v_tmp%1]").arg(i);
+            chain += nextLabel + "; " + nextLabel;
+        }
     }
-    if (padCount == 0) return "[0:v]copy[filtered];";
-    if (!chain.endsWith("[filtered];")) chain.replace(QString("[f%1]").arg(padCount), "[filtered]");
-    if (!chain.endsWith(";")) chain += ";";
+
+    chain += "[filtered];";
     return chain;
 }
 
