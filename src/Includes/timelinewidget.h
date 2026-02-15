@@ -217,7 +217,7 @@ private:
 
     QStringList trackNames = {
         "All audio", "All discord audio + mic", "Only discord audio",
-        "Chromium + mic", "WEBRTC VoiceEngine + mic", "everything excluding discord"
+        "Chromium + mic", "WEBRTC VoiceEngine + mic", "everything excluding discord", "Chromium only", "WEBRTC VoiceEngine only"
     };
 
     void loadAudioFast(const QString &path);
