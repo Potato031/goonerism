@@ -6,6 +6,7 @@
 #include <QStandardPaths>
 #include <QCoreApplication>
 #include <QFileInfo>
+#include <QMessageBox>
 #include <QTime>
 
 #include "../Includes/timelinewidget.h"
@@ -36,17 +37,18 @@ static QString buildFilterChain(int vidW, int vidH, const QList<VideoWithCropWid
     if (filterList.isEmpty()) return "[0:v]null[filtered];";
 
     QString chain;
-    // The very first input is the raw video
     QString lastOutput = "[0:v]";
 
     for (int i = 0; i < filterList.size(); ++i) {
         const auto& obj = filterList[i];
 
-        // Ensure even dimensions for YUV pixel formats
+        // IMPORTANT: Windows FFmpeg yuv420p requires even numbers.
+        // & ~1 zero-fills the last bit, forcing the number to be even.
         int absX = qRound(vidW * obj.l) & ~1;
         int absY = qRound(vidH * obj.t) & ~1;
         int absW = qRound(vidW * (obj.r - obj.l)) & ~1;
         int absH = qRound(vidH * (obj.b - obj.t)) & ~1;
+
         if (absW <= 0 || absH <= 0) continue;
 
         QString currentStepLabel = QString("[v_step%1]").arg(i);
@@ -61,33 +63,31 @@ static QString buildFilterChain(int vidW, int vidH, const QList<VideoWithCropWid
             chain += QString("%1drawbox=x=%2:y=%3:w=%4:h=%5:color=black:t=fill%6; ")
                      .arg(lastOutput).arg(absX).arg(absY).arg(absW).arg(absH).arg(currentStepLabel);
         }
-
-        // The output of THIS filter becomes the input for the NEXT filter
         lastOutput = currentStepLabel;
     }
 
-    chain += lastOutput + "copy[filtered];";
+    chain += QString("%1copy[filtered];").arg(lastOutput);
     return chain;
 }
 
 void TimelineWidget::copyTrimmedVideo() {
     if (segments.empty() || isExporting) return;
 
+    // Default resolution fallback
     int vidW = 1920;
     int vidH = 1080;
     QList<VideoWithCropWidget::FilterObject> filters;
-    const QWidget* topWindow = this->window();
 
+    // Find the Video Widget to get current filters and actual video dimensions
+    const QWidget* topWindow = this->window();
     if (const QObject* videoContainer = topWindow->findChild<QObject*>("VideoContainer")) {
         auto* vwc = videoContainer->findChild<VideoWithCropWidget*>();
         if (vwc) {
             filters = vwc->filterObjects;
             const QVariant vW = vwc->property("actualWidth");
             const QVariant vH = vwc->property("actualHeight");
-            if (vW.isValid() && vH.isValid()) {
-                vidW = vW.toInt();
-                vidH = vH.toInt();
-            }
+            if (vW.isValid() && vW.toInt() > 0) vidW = vW.toInt();
+            if (vH.isValid() && vH.toInt() > 0) vidH = vH.toInt();
         }
     }
 
@@ -97,9 +97,11 @@ void TimelineWidget::copyTrimmedVideo() {
     qint64 totalMs = 0;
     for (const auto& seg : segments) totalMs += (seg.endMs - seg.startMs);
     const double durationSec = qMax(0.1, totalMs / 1000.0);
+
     isExporting = true;
     const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
 
+    // Build the filter chain (Privacy boxes -> Trimming -> Cropping)
     QString filter = buildFilterChain(vidW, vidH, filters);
 
     for (int i = 0; i < segments.size(); ++i) {
@@ -113,12 +115,14 @@ void TimelineWidget::copyTrimmedVideo() {
 
     for (int i = 0; i < segments.size(); ++i) filter += QString("[v%1][a%1]").arg(i);
 
+    // Final crop math (ensuring even numbers for X, Y, W, H)
     QString cropStr = QString("crop=trunc(iw*(%1-%2)/2)*2:trunc(ih*(%3-%4)/2)*2:trunc(iw*%2/2)*2:trunc(ih*%4/2)*2,setsar=1")
                       .arg(cropRight).arg(cropLeft).arg(cropBottom).arg(cropTop);
 
     filter += QString("concat=n=%1:v=1:a=1[cv][outa];[cv]%2[outv]").arg(segments.size()).arg(cropStr);
 
-    double targetSizeBytes = 6.7 * 1024 * 1024;
+    // Bitrate math for 8MB limit (Discord/Slack friendly)
+    double targetSizeBytes = 7.5 * 1024 * 1024; // Leave room for headers
     double audioBitrateBps = 32000;
     double availableVideoBitsPerSec = (targetSizeBytes * 8 / durationSec) - audioBitrateBps;
     int videoBitrateKbps = qBound(200, static_cast<int>(availableVideoBitsPerSec / 1000), 12000);
@@ -131,21 +135,28 @@ void TimelineWidget::copyTrimmedVideo() {
     if (hasNvidiaEncoder()) {
         args << "-c:v" << "h264_nvenc" << "-preset" << "p4" << "-tune" << "hq" << "-rc" << "vbr";
     } else {
-        args << "-c:v" << "libx264" << "-preset" << "faster";
+        args << "-c:v" << "libx264" << "-preset" << "faster" << "-crf" << "23";
     }
 
     args << "-pix_fmt" << "yuv420p"
          << "-b:v" << QString("%1k").arg(videoBitrateKbps)
-         << "-maxrate" << QString("%1k").arg(static_cast<int>(videoBitrateKbps * 1.1))
+         << "-maxrate" << QString("%1k").arg(static_cast<int>(videoBitrateKbps * 1.5))
          << "-bufsize" << QString("%1k").arg(videoBitrateKbps * 2);
 
     args << "-c:a" << "aac" << "-b:a" << "32k" << "-ac" << "1";
     args << "-progress" << "pipe:1" << QDir::toNativeSeparators(finalPath);
 
     auto *ffmpeg = new QProcess(this);
+
+    // Capture log for debugging
+    QSharedPointer<QString> ffmpegLog(new QString());
+    connect(ffmpeg, &QProcess::readyReadStandardError, [ffmpeg, ffmpegLog]() {
+        ffmpegLog->append(ffmpeg->readAllStandardError());
+    });
+
     showProgressNotification(ffmpeg, totalMs);
 
-    connect(ffmpeg, &QProcess::finished, this, [this, finalPath, ffmpeg](const int exitCode) {
+    connect(ffmpeg, &QProcess::finished, this, [this, finalPath, ffmpeg, ffmpegLog](const int exitCode) {
         isExporting = false;
         if (exitCode == 0) {
             auto m = new QMimeData();
@@ -153,15 +164,18 @@ void TimelineWidget::copyTrimmedVideo() {
             QApplication::clipboard()->setMimeData(m);
             showNotification("Copied trimmed video");
         } else {
+            // SHOW THE LOG ON FAILURE
+            qDebug() << "FFMPEG FAILURE LOG:\n" << *ffmpegLog;
+            QMessageBox::critical(this->window(), "Export Failed",
+                "FFmpeg Error Details:\n\n" + (*ffmpegLog).right(500)); // Show last 500 chars
             showNotification("FAILED");
         }
         update();
         ffmpeg->deleteLater();
     });
-    qDebug() << "FFmpeg Args:" << args.join(" ");
+
     ffmpeg->start(getFFmpegPath(), args);
 }
-
 void TimelineWidget::copyTrimmedVideoMuted() {
     if (segments.empty() || isExporting) return;
 
