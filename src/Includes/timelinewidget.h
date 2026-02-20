@@ -133,7 +133,7 @@ public:
     void validatePlayheadPosition();
     void autoCutSilence();
     qint64 getStartLimit() const;
-
+    QString getMediaFilePath() const { return currentFileUrl.toLocalFile(); }
     qint64 getEndLimit() const;
     void forceFitToDuration();
     void copyTrimmedVideo();

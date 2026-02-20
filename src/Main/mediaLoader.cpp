@@ -41,6 +41,7 @@ void TimelineWidget::setDuration(qint64 duration) {
     // Stretch the placeholder to the real duration
     if (segments.isEmpty()) {
         segments.append({0, durationMs});
+
     } else {
         // Update the first segment to match the real duration
         segments[0].startMs = 0;

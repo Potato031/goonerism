@@ -6,7 +6,9 @@
 #include <QJsonArray>
 #include <QProcess>
 #include <QProgressDialog>
-
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include "../Includes/mainWindow.h"
 
 
