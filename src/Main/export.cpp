@@ -69,16 +69,14 @@ static QString buildFilterChain(int vidW, int vidH, const QList<VideoWithCropWid
     chain += QString("%1copy[filtered];").arg(lastOutput);
     return chain;
 }
-
 void TimelineWidget::copyTrimmedVideo() {
     if (segments.empty() || isExporting) return;
 
-    // Default resolution fallback
+    // 1. Resolve dimensions and filters
     int vidW = 1920;
     int vidH = 1080;
     QList<VideoWithCropWidget::FilterObject> filters;
 
-    // Find the Video Widget to get current filters and actual video dimensions
     const QWidget* topWindow = this->window();
     if (const QObject* videoContainer = topWindow->findChild<QObject*>("VideoContainer")) {
         auto* vwc = videoContainer->findChild<VideoWithCropWidget*>();
@@ -92,7 +90,8 @@ void TimelineWidget::copyTrimmedVideo() {
     }
 
     const QString outputDir = getExportDir();
-    QString finalPath = outputDir + "/" + generateClippedName("mp4");
+    QString finalPath = QDir::toNativeSeparators(outputDir + "/" + generateClippedName("mp4"));
+    QString inputPath = QDir::toNativeSeparators(currentFileUrl.toLocalFile());
 
     qint64 totalMs = 0;
     for (const auto& seg : segments) totalMs += (seg.endMs - seg.startMs);
@@ -101,73 +100,91 @@ void TimelineWidget::copyTrimmedVideo() {
     isExporting = true;
     const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
 
-    // Build the filter chain (Privacy boxes -> Trimming -> Cropping)
+    // 2. Build Filter Chain
     QString filter = buildFilterChain(vidW, vidH, filters);
 
     for (int i = 0; i < segments.size(); ++i) {
         double s = (segments[i].startMs / 1000.0) - seekStart;
         double d = (segments[i].endMs - segments[i].startMs) / 1000.0;
+
         filter += QString("[filtered]trim=start=%1:duration=%2,setpts=PTS-STARTPTS[v%3];")
                   .arg(qMax(0.0, s)).arg(d).arg(i);
-        filter += QString("[0:a:%1]atrim=start=%2:duration=%3,asetpts=PTS-STARTPTS[a%4];")
-                  .arg(currentAudioTrack).arg(qMax(0.0, s)).arg(d).arg(i);
+
+        filter += QString("[0:a:%1]atrim=start=%2:duration=%3,asetpts=PTS-STARTPTS,volume=%4,aresample=async=1[a%5];")
+                  .arg(currentAudioTrack).arg(qMax(0.0, s)).arg(d).arg(segments[i].gain).arg(i);
     }
 
     for (int i = 0; i < segments.size(); ++i) filter += QString("[v%1][a%1]").arg(i);
 
-    // Final crop math (ensuring even numbers for X, Y, W, H)
     QString cropStr = QString("crop=trunc(iw*(%1-%2)/2)*2:trunc(ih*(%3-%4)/2)*2:trunc(iw*%2/2)*2:trunc(ih*%4/2)*2,setsar=1")
                       .arg(cropRight).arg(cropLeft).arg(cropBottom).arg(cropTop);
 
     filter += QString("concat=n=%1:v=1:a=1[cv][outa];[cv]%2[outv]").arg(segments.size()).arg(cropStr);
 
-    // Bitrate math for 8MB limit (Discord/Slack friendly)
-    double targetSizeBytes = 7.5 * 1024 * 1024; // Leave room for headers
-    double audioBitrateBps = 32000;
-    double availableVideoBitsPerSec = (targetSizeBytes * 8 / durationSec) - audioBitrateBps;
-    int videoBitrateKbps = qBound(200, static_cast<int>(availableVideoBitsPerSec / 1000), 12000);
+
+    double originalBitrateKbps = (originalFileSize * 8.0) / (durationMs / 1000.0) / 1000.0;
+    double estimatedSizeMB = (originalBitrateKbps * durationSec) / 8192.0;
+    bool shouldCompress = (estimatedSizeMB >= 8);
 
     QStringList args;
-    args << "-y" << "-ss" << QString::number(seekStart) << "-i" << QDir::toNativeSeparators(currentFileUrl.toLocalFile());
+    args << "-y" << "-ss" << QString::number(seekStart) << "-i" << inputPath;
     args << "-filter_complex" << filter;
     args << "-map" << "[outv]" << "-map" << "[outa]";
 
-    if (hasNvidiaEncoder()) {
-        args << "-c:v" << "h264_nvenc" << "-preset" << "p4" << "-tune" << "hq" << "-rc" << "vbr";
+    if (shouldCompress) {
+        double targetSizeBytes = 7.1 * 1024 * 1024;
+        double audioBitrateBps = 128000;
+        double videoBitrateKbps = qBound(200.0, (targetSizeBytes * 8 / durationSec - audioBitrateBps) / 1000.0, 12000.0);
+
+        if (hasNvidiaEncoder()) {
+            args << "-c:v" << "h264_nvenc" << "-preset" << "p1" << "-tune" << "hq" << "-rc" << "vbr";
+        } else {
+            args << "-c:v" << "libx264" << "-preset" << "ultrafast";
+        }
+
+        args << "-b:v" << QString("%1k").arg(videoBitrateKbps)
+             << "-maxrate" << QString("%1k").arg(static_cast<int>(videoBitrateKbps * 1.5))
+             << "-bufsize" << QString("%1k").arg(static_cast<int>(videoBitrateKbps * 2));
+
+        args << "-c:a" << "aac" << "-b:a" << "128k";
     } else {
-        args << "-c:v" << "libx264" << "-preset" << "faster" << "-crf" << "23";
+        int targetK = static_cast<int>(originalBitrateKbps);
+
+        if (hasNvidiaEncoder()) {
+            args << "-c:v" << "h264_nvenc" << "-preset" << "p7" << "-rc" << "vbr"
+                 << "-b:v" << QString("%1k").arg(targetK) << "-maxrate" << QString("%1k").arg(targetK * 2);
+        } else {
+            args << "-c:v" << "libx264" << "-preset" << "slow" << "-crf" << "18"
+                 << "-maxrate" << QString("%1k").arg(targetK) << "-bufsize" << QString("%1k").arg(targetK * 2);
+        }
+        args << "-c:a" << "aac" << "-b:a" << "192k";
     }
 
-    args << "-pix_fmt" << "yuv420p"
-         << "-b:v" << QString("%1k").arg(videoBitrateKbps)
-         << "-maxrate" << QString("%1k").arg(static_cast<int>(videoBitrateKbps * 1.5))
-         << "-bufsize" << QString("%1k").arg(videoBitrateKbps * 2);
-
-    args << "-c:a" << "aac" << "-b:a" << "32k" << "-ac" << "1";
-    args << "-progress" << "pipe:1" << QDir::toNativeSeparators(finalPath);
+    args << "-pix_fmt" << "yuv420p" << "-movflags" << "+faststart" << "-progress" << "pipe:1" << QDir::toNativeSeparators(finalPath);
 
     auto *ffmpeg = new QProcess(this);
-
-    // Capture log for debugging
     QSharedPointer<QString> ffmpegLog(new QString());
-    connect(ffmpeg, &QProcess::readyReadStandardError, [ffmpeg, ffmpegLog]() {
-        ffmpegLog->append(ffmpeg->readAllStandardError());
+
+    ffmpeg->setProcessChannelMode(QProcess::MergedChannels);
+    connect(ffmpeg, &QProcess::readyRead, [ffmpeg, ffmpegLog]() {
+        QByteArray data = ffmpeg->peek(ffmpeg->bytesAvailable());
+        ffmpegLog->append(data);
     });
 
     showProgressNotification(ffmpeg, totalMs);
 
-    connect(ffmpeg, &QProcess::finished, this, [this, finalPath, ffmpeg, ffmpegLog](const int exitCode) {
+    connect(ffmpeg, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, finalPath, ffmpeg, ffmpegLog](int exitCode) {
         isExporting = false;
         if (exitCode == 0) {
             auto m = new QMimeData();
             m->setUrls({QUrl::fromLocalFile(finalPath)});
             QApplication::clipboard()->setMimeData(m);
-            showNotification("Copied trimmed video");
+            showNotification("Copied trimmed video (High Fidelity)");
         } else {
-            // SHOW THE LOG ON FAILURE
             qDebug() << "FFMPEG FAILURE LOG:\n" << *ffmpegLog;
             QMessageBox::critical(this->window(), "Export Failed",
-                "FFmpeg Error Details:\n\n" + (*ffmpegLog).right(500)); // Show last 500 chars
+                "FFmpeg Details:\n\n" + (*ffmpegLog).right(600));
             showNotification("FAILED");
         }
         update();
@@ -176,6 +193,7 @@ void TimelineWidget::copyTrimmedVideo() {
 
     ffmpeg->start(getFFmpegPath(), args);
 }
+
 void TimelineWidget::copyTrimmedVideoMuted() {
     if (segments.empty() || isExporting) return;
 

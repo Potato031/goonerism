@@ -112,6 +112,7 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
     double pxPerMs = static_cast<double>(contentWidth) / durationMs;
 
     // Draw Clips
+    // ... inside paintEvent, replacing the Clip Drawing loop ...
     for (int i = 0; i < segments.size(); ++i) {
         QRectF clipRect(segments[i].startMs * pxPerMs, vTop, (segments[i].endMs - segments[i].startMs) * pxPerMs, trackHeight);
         bool isSel = (i == selectedSegmentIdx) || selectedSegmentIndices.contains(i);
@@ -126,7 +127,18 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
 
         painter.drawRoundedRect(clipRect, 5, 5);
 
-        // Waveforms
+        // Draw Gain Label (Visual Feedback)
+        if (segments[i].gain != 1.0f) {
+            painter.save();
+            painter.setPen(Qt::white);
+            QFont labelFont = painter.font(); labelFont.setPointSizeF(7);
+            painter.setFont(labelFont);
+            painter.drawText(clipRect.adjusted(5, 2, 0, 0), Qt::AlignTop | Qt::AlignLeft,
+                             QString("%1x").arg(segments[i].gain, 0, 'f', 1));
+            painter.restore();
+        }
+
+        // Waveforms using segment-specific gain
         if (!audioSamples.empty()) {
             QColor currentWaveColor = isSel ? accent : accent.darker(180);
             painter.setPen(QPen(currentWaveColor, 1));
@@ -136,7 +148,8 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
 
             for (int s = startIdx; s < endIdx && s < (int)audioSamples.size(); s++) {
                 int x = (s * (double)contentWidth) / audioSamples.size();
-                float norm = (audioSamples[s] / maxAmplitude) * audioGain;
+                // USE SEGMENT GAIN HERE
+                float norm = (audioSamples[s] / maxAmplitude) * segments[i].gain;
                 int h = qMin((float)trackHeight, norm * (trackHeight - 10));
                 painter.drawLine(x, aTop + (trackHeight/2) - h/2, x, aTop + (trackHeight/2) + h/2);
             }

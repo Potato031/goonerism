@@ -153,6 +153,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
     else if (isScrubbing && (e->buttons() & Qt::LeftButton)) {
         currentPosMs = qBound(0LL, static_cast<qint64>(drawX / pxPerMs), durationMs);
         validatePlayheadPosition();
+        updateEditorVolume();
         emit playheadMoved(currentPosMs);
         update();
     }
@@ -174,9 +175,37 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* e) {
 
 void TimelineWidget::wheelEvent(QWheelEvent *e) {
     const int viewWidth = width() - sidebarWidth;
+
     if (e->modifiers() & Qt::ShiftModifier) {
-        audioGain = qBound(0.0f, audioGain + (e->angleDelta().y() > 0 ? 0.1f : -0.1f), 5.0f);
-        emit audioGainChanged(audioGain);
+        // Find what we are hovering over
+        const int drawX = e->position().x() - sidebarWidth + scrollOffset;
+        const double pxPerMs = static_cast<double>(viewWidth) * zoomFactor / durationMs;
+        const qint64 hoverTime = static_cast<qint64>(drawX / pxPerMs);
+
+        QSet<int> targets;
+        int hoveredIdx = -1;
+        for (int i = 0; i < segments.size(); ++i) {
+            if (hoverTime >= segments[i].startMs && hoverTime <= segments[i].endMs) {
+                hoveredIdx = i;
+                break;
+            }
+        }
+
+        if (hoveredIdx != -1) {
+            if (selectedSegmentIndices.contains(hoveredIdx)) {
+                targets = selectedSegmentIndices;
+            } else {
+                targets.insert(hoveredIdx);
+            }
+        }
+
+        float delta = (e->angleDelta().y() > 0 ? 0.1f : -0.1f);
+        for (int idx : targets) {
+            segments[idx].gain = qBound(0.0f, segments[idx].gain + delta, 5.0f);
+        }
+
+        if(!targets.isEmpty()) emit audioGainChanged(audioGain); updateEditorVolume(); update();
+
     } else if (e->modifiers() & Qt::ControlModifier) {
         double oldZoom = zoomFactor;
         zoomFactor = qBound(1.0, zoomFactor * (e->angleDelta().y() > 0 ? 1.15 : 1.0/1.15), 100.0);

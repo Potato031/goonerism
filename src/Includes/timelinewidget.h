@@ -88,6 +88,7 @@ public:
         float volume = 1.0f;
         float pitch = 1.0f;
         bool muted = false;
+        float gain = 1.0f;
     };
 
     struct TextSegment {
@@ -148,6 +149,15 @@ public:
     QColor m_trackColor = QColor("#1A1A1C");
     QColor m_waveformColor = QColor("#88888E");
 
+    float getGainAtPos(qint64 posMs) {
+        for (const auto& seg : segments) {
+            if (posMs >= seg.startMs && posMs <= seg.endMs) {
+                return seg.muted ? 0.0f : seg.gain;
+            }
+        }
+        return 1.0f; // Default if not inside a segment
+    }
+
 signals:
     void playheadMoved(qint64 pos);
     void requestTogglePlayback();
@@ -172,6 +182,11 @@ protected:
         this->style()->polish(this);
     }
     bool isAnySelectedMuted();
+
+
+
+
+    void updateEditorVolume();
 
 private:
     struct TimelineState {

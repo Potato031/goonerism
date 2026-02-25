@@ -256,6 +256,7 @@ void MainWindow::setupConnections() {
 
     connect(player, &QMediaPlayer::positionChanged, [this](qint64 pos) {
         timeline->currentPosMs = pos;
+        updateVolume();
         if (player->playbackState() == QMediaPlayer::PlayingState) {
             timeline->validatePlayheadPosition();
             if (timeline->currentPosMs != pos) player->setPosition(timeline->currentPosMs);
@@ -326,7 +327,17 @@ void MainWindow::handlePlaybackState(QMediaPlayer::PlaybackState state) {
 }
 
 void MainWindow::updateVolume() {
-    audio->setVolume((volSlider->value() / 100.0f) * timeline->audioGain);
+    // 1. Get the current clip-specific gain from the timeline
+    float segmentGain = 1.0f;
+
+    // We need a way to ask the timeline: "What is the gain at this exact millisecond?"
+    // Let's assume we add a helper 'getGainAtPos' to TimelineWidget
+    segmentGain = timeline->getGainAtPos(player->position());
+
+    // 2. Multiply everything: Global Slider * Master Gain * Segment Gain
+    float finalVol = (volSlider->value() / 100.0f) * timeline->audioGain * segmentGain;
+
+    audio->setVolume(finalVol);
 }
 
 void MainWindow::importMedia() {

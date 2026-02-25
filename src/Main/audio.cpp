@@ -1,3 +1,4 @@
+#include <QAudioOutput>
 #include <QDir>
 #include <QProcess>
 #include <QRegularExpression>
@@ -52,19 +53,35 @@ void TimelineWidget::loadAudioFast(const QString &inputPath) {
 
     ffmpeg->start(getFFToolPath("ffmpeg"), args);
 }
-
 void TimelineWidget::autoCutSilence() {
-    if (durationMs <= 0 || isExporting) return;
+    if (durationMs <= 0 || isExporting || segments.empty()) return;
     saveState();
-    showNotification("ANALYZING AUDIO");
+    showNotification("ANALYZING TRIMMED SECTIONS");
+
+    // Capture the current segments we want to process
+    // We copy them so that if the user changes the timeline while FFmpeg runs, we don't crash
+    QList<Segment> originalWorkArea = segments;
+
+    // We'll use a complex filter to only analyze the segments you've kept
+    // This is more efficient than analyzing the whole file
+    QStringList filterParts;
+    for (const auto& seg : originalWorkArea) {
+        double s = seg.startMs / 1000.0;
+        double d = (seg.endMs - seg.startMs) / 1000.0;
+        filterParts << QString("between(t,%1,%2)").arg(s).arg(s + d);
+    }
+
+    // This filter tells FFmpeg: "Only process audio if the time is within my segments"
+    QString selectFilter = QString("aselect='%1',silencedetect=noise=-45dB:d=0.3").arg(filterParts.join("+"));
 
     QStringList args;
     args << "-i" << currentFileUrl.toLocalFile()
-         << "-af" << QString("silencedetect=noise=-45dB:d=0.3")
+         << "-map" << QString("0:a:%1").arg(currentAudioTrack)
+         << "-af" << selectFilter
          << "-f" << "null" << "-";
 
     QProcess* ffmpeg = new QProcess(this);
-    connect(ffmpeg, &QProcess::finished, [this, ffmpeg]() {
+    connect(ffmpeg, &QProcess::finished, [this, ffmpeg, originalWorkArea]() {
         QString output = ffmpeg->readAllStandardError();
 
         QList<double> silenceStarts;
@@ -80,43 +97,47 @@ void TimelineWidget::autoCutSilence() {
         while (endMatches.hasNext()) silenceEnds << endMatches.next().captured(1).toDouble();
 
         if (silenceStarts.isEmpty()) {
-            showNotification("NO SILENCE FOUND");
+            showNotification("NO SILENCE FOUND IN TRIMMED AREA");
         } else {
-            segments.clear();
-            double lastEnd = 0;
-            constexpr double padding = 0.2;
-            const double totalDur = durationMs / 1000.0;
+            QList<Segment> newSegments;
+            constexpr double padding = 0.15; // Slightly tighter padding for auto-cut
 
-            for (int i = 0; i < silenceStarts.size(); ++i) {
-                const double clipStart = lastEnd;
+            // Process each original segment and "sub-cut" it based on detected silence
+            for (const auto& area : originalWorkArea) {
+                double areaStart = area.startMs / 1000.0;
+                double areaEnd = area.endMs / 1000.0;
+                double lastProcessed = areaStart;
 
-                if (const double clipEnd = silenceStarts[i]; clipEnd - clipStart > 0.1) {
-                    Segment s;
-                    s.startMs = qMax(0.0, (clipStart - padding)) * 1000;
-                    s.endMs = qMin(totalDur, (clipEnd + padding)) * 1000;
+                for (int i = 0; i < silenceStarts.size(); ++i) {
+                    double sStart = silenceStarts[i];
+                    double sEnd = (i < silenceEnds.size()) ? silenceEnds[i] : areaEnd;
 
-                    if (!segments.empty() && s.startMs < segments.back().endMs) {
-                        segments.back().endMs = s.endMs;
-                    } else {
-                        segments.push_back(s);
+                    // If the silence is inside our current segment
+                    if (sStart > areaStart && sStart < areaEnd) {
+                        // Add the "loud" part before this silence
+                        if (sStart - lastProcessed > 0.1) {
+                            Segment s;
+                            s.startMs = qMax(areaStart, lastProcessed - (lastProcessed == areaStart ? 0 : padding)) * 1000;
+                            s.endMs = qMin(areaEnd, sStart + padding) * 1000;
+                            newSegments.push_back(s);
+                        }
+                        lastProcessed = sEnd;
                     }
                 }
-                if (i < silenceEnds.size()) lastEnd = silenceEnds[i];
-            }
 
-            if (totalDur - lastEnd > 0.1) {
-                Segment s;
-                s.startMs = qMax(0.0, (lastEnd - padding)) * 1000;
-                s.endMs = totalDur * 1000;
-
-                if (!segments.empty() && s.startMs < segments.back().endMs) {
-                    segments.back().endMs = s.endMs;
-                } else {
-                    segments.push_back(s);
+                // Add the remaining "loud" part after the last silence in this area
+                if (areaEnd - lastProcessed > 0.1) {
+                    Segment s;
+                    s.startMs = qMax(areaStart, lastProcessed - padding) * 1000;
+                    s.endMs = areaEnd * 1000;
+                    newSegments.push_back(s);
                 }
             }
 
-            showNotification(QString("AUTO-CUT: %1 CLIPS").arg(segments.size()));
+            if (!newSegments.isEmpty()) {
+                segments = newSegments;
+                showNotification(QString("CLEANED: %1 CLIPS").arg(segments.size()));
+            }
             update();
         }
         ffmpeg->deleteLater();
@@ -124,7 +145,6 @@ void TimelineWidget::autoCutSilence() {
 
     ffmpeg->start(getFFToolPath("ffmpeg"), args);
 }
-
 void TimelineWidget::detectAudioTracks(const QString &path) {
     QProcess ffprobe;
     QStringList args;
@@ -145,4 +165,18 @@ bool TimelineWidget::isAnySelectedMuted() {
     if (selectedSegmentIdx != -1) targets.insert(selectedSegmentIdx);
     for (int idx : targets) if (segments[idx].muted) return true;
     return false;
+}
+
+void TimelineWidget::updateEditorVolume() {
+    if (!thumbPlayer || !thumbPlayer->audioOutput()) return; // Added safety check
+
+    float currentClipGain = 1.0f;
+    for (const auto& seg : segments) {
+        if (currentPosMs >= seg.startMs && currentPosMs <= seg.endMs) {
+            currentClipGain = seg.gain;
+            if (seg.muted) currentClipGain = 0.0f;
+            break;
+        }
+    }
+    thumbPlayer->audioOutput()->setVolume(qBound(0.0f, audioGain * currentClipGain, 5.0f));
 }

@@ -19,6 +19,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QScrollArea>
 
 
@@ -64,7 +65,6 @@ private:
     QScrollArea* sidebarScroll;
     QWidget* sidebarContent;
     QVBoxLayout* sidebarListLayout;
-
     // --- NEW HELPER FUNCTIONS ---
     void loadClipDirectly(const QString &filePath);
     void updateSidebar();
