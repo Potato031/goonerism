@@ -10,6 +10,7 @@
 #include <QVideoSink>
 #include <QWidget>
 #include <QList>
+#include <QString>
 
 class VideoWithCropWidget : public QWidget {
     Q_OBJECT
@@ -32,6 +33,8 @@ public:
     QColor m_accentColor = QColor("#50C878");
     QColor m_secondaryColor = QColor("#00FA9A");
     QColor m_backgroundColor = QColor("#040605");
+    QString emptyStateTitle = "Import media to start editing";
+    QString emptyStateBody = "Drag a file into the window or use Import Media.";
 
     float cropT = 0.03f, cropB = 0.96f, cropL = 0.0f, cropR = 1.0f;
     bool adjustingFilter = false;
@@ -59,6 +62,12 @@ public:
         adjustingFilter = true;
         update();
         emit filtersChanged(filterObjects);
+    }
+
+    void setPlaceholderState(const QString &title, const QString &body) {
+        emptyStateTitle = title;
+        emptyStateBody = body;
+        update();
     }
 
     QRect calculateTargetRect() {
@@ -98,7 +107,22 @@ protected:
         p.setRenderHint(QPainter::Antialiasing);
         p.fillRect(rect(), m_backgroundColor);
 
-        if (lastFrame.isNull()) return;
+        if (lastFrame.isNull()) {
+            QFont titleFont = p.font();
+            titleFont.setPointSize(16);
+            titleFont.setBold(true);
+            p.setFont(titleFont);
+            p.setPen(QColor("#EAFBF6"));
+            p.drawText(rect().adjusted(24, 0, -24, -18), Qt::AlignCenter, emptyStateTitle);
+
+            QFont bodyFont = p.font();
+            bodyFont.setPointSize(10);
+            bodyFont.setBold(false);
+            p.setFont(bodyFont);
+            p.setPen(QColor("#88A8A0"));
+            p.drawText(rect().adjusted(44, 48, -44, 26), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, emptyStateBody);
+            return;
+        }
 
         QRect tr = calculateTargetRect();
         QImage processedFrame = lastFrame.copy();

@@ -71,6 +71,14 @@ static QString buildFilterChain(int vidW, int vidH, const QList<VideoWithCropWid
 }
 void TimelineWidget::copyTrimmedVideo() {
     if (segments.empty() || isExporting) return;
+    if (!hasVideoStream) {
+        showNotification("VIDEO EXPORT NEEDS A VIDEO TRACK");
+        return;
+    }
+    if (!hasAudioStream) {
+        copyTrimmedVideoMuted();
+        return;
+    }
 
     // 1. Resolve dimensions and filters
     int vidW = 1920;
@@ -196,6 +204,10 @@ void TimelineWidget::copyTrimmedVideo() {
 
 void TimelineWidget::copyTrimmedVideoMuted() {
     if (segments.empty() || isExporting) return;
+    if (!hasVideoStream) {
+        showNotification("NO VIDEO TRACK AVAILABLE");
+        return;
+    }
 
     int vidW = 1920, vidH = 1080;
     QList<VideoWithCropWidget::FilterObject> filters;
@@ -283,6 +295,10 @@ void TimelineWidget::copyTrimmedVideoMuted() {
 
 void TimelineWidget::copyTrimmedGif() {
     if (segments.empty()) return;
+    if (!hasVideoStream) {
+        showNotification("GIF EXPORT NEEDS VIDEO");
+        return;
+    }
 
     int vidW = 1920, vidH = 1080;
     QList<VideoWithCropWidget::FilterObject> filters;
@@ -328,6 +344,10 @@ void TimelineWidget::copyTrimmedGif() {
 
 void TimelineWidget::copyTrimmedAudio() {
     if (segments.empty() || isExporting) return;
+    if (!hasAudioStream) {
+        showNotification("NO AUDIO TRACK AVAILABLE");
+        return;
+    }
 
     const QString outputDir = getExportDir();
     QString finalPath = outputDir + "/" + generateClippedName("mp3");

@@ -16,6 +16,13 @@ static QString getFFToolPath(const QString &tool) {
 }
 
 void TimelineWidget::loadAudioFast(const QString &inputPath) {
+    if (!hasAudioStream) {
+        audioSamples.clear();
+        maxAmplitude = 0.01f;
+        update();
+        return;
+    }
+
     QString tempAudioPath = QDir::tempPath() + "/waveform_data.raw";
     auto *ffmpeg = new QProcess(this);
     QStringList args;
@@ -54,7 +61,10 @@ void TimelineWidget::loadAudioFast(const QString &inputPath) {
     ffmpeg->start(getFFToolPath("ffmpeg"), args);
 }
 void TimelineWidget::autoCutSilence() {
-    if (durationMs <= 0 || isExporting || segments.empty()) return;
+    if (durationMs <= 0 || isExporting || segments.empty() || !hasAudioStream) {
+        showNotification("NO AUDIO TRACK TO ANALYZE");
+        return;
+    }
     saveState();
     showNotification("ANALYZING TRIMMED SECTIONS");
 
@@ -146,17 +156,34 @@ void TimelineWidget::autoCutSilence() {
     ffmpeg->start(getFFToolPath("ffmpeg"), args);
 }
 void TimelineWidget::detectAudioTracks(const QString &path) {
-    QProcess ffprobe;
-    QStringList args;
-    args << "-v" << "error" << "-select_streams" << "a"
-         << "-show_entries" << "stream=index" << "-of" << "csv=p=0" << path;
+    auto runProbe = [&](const QStringList &args) {
+        QProcess probe;
+        probe.start(getFFToolPath("ffprobe"), args);
+        probe.waitForFinished();
+        return probe.readAllStandardOutput().trimmed();
+    };
 
-    ffprobe.start(getFFToolPath("ffprobe"), args);
-    ffprobe.waitForFinished();
+    const QString audioOutput = runProbe({
+        "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=index",
+        "-of", "csv=p=0",
+        path
+    });
 
-    const QString output = ffprobe.readAllStandardOutput().trimmed();
-    totalAudioTracks = output.split('\n', Qt::SkipEmptyParts).count();
-    if (totalAudioTracks == 0) totalAudioTracks = 1;
+    const QString videoOutput = runProbe({
+        "-v", "error",
+        "-select_streams", "v",
+        "-show_entries", "stream=index",
+        "-of", "csv=p=0",
+        path
+    });
+
+    totalAudioTracks = audioOutput.split('\n', Qt::SkipEmptyParts).count();
+    hasAudioStream = totalAudioTracks > 0;
+    hasVideoStream = !videoOutput.split('\n', Qt::SkipEmptyParts).isEmpty();
+
+    if (!hasAudioStream) totalAudioTracks = 1;
     currentAudioTrack = 0;
 }
 

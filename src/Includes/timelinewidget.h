@@ -62,7 +62,6 @@ class TimelineWidget : public QWidget {
    Q_PROPERTY(QColor backgroundColor MEMBER m_backgroundColor)
    Q_PROPERTY(QColor trackColor MEMBER m_trackColor)
    Q_PROPERTY(QColor waveformColor MEMBER m_waveformColor)
-    Q_PROPERTY(QColor trackColor MEMBER m_trackColor) // Add this line!
 public slots:
     void updateCropValues(float t, float b, float l, float r) {
         cropTop = t;
@@ -143,6 +142,8 @@ public:
     void copyTrimmedVideoMuted();
     QString customExportName;
     double getTotalSegmentsDuration();
+    bool sourceHasVideo() const { return hasVideoStream; }
+    bool sourceHasAudio() const { return hasAudioStream; }
     QColor m_accentColor = QColor("#3D5AFE"); // Defaults in case QSS fails
     QColor m_secondaryColor = QColor("#FF3232");
     QColor m_backgroundColor = QColor("#080809");
@@ -242,9 +243,12 @@ private:
     static void showNotification(const QString &message);
     void showProgressNotification(QProcess* process, qint64 totalMs);
     void detectAudioTracks(const QString &path);
+    void resetMediaState();
 
 
     QString generateClippedName(const QString &extension) const;
+    bool hasVideoStream = true;
+    bool hasAudioStream = true;
 };
 
 #endif // TIMELINEWIDGET_H

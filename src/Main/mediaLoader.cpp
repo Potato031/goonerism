@@ -2,9 +2,7 @@
 #include <QVideoFrame>
 #include "../Includes/timelinewidget.h"
 
-void TimelineWidget::setMediaSource(const QUrl &url) {
-    currentFileUrl = url;
-
+void TimelineWidget::resetMediaState() {
     thumbnailCache.clear();
     audioSamples.clear();
     undoStack.clear();
@@ -17,15 +15,29 @@ void TimelineWidget::setMediaSource(const QUrl &url) {
     zoomFactor = 1.0;
     scrollOffset = 0;
     selectedSegmentIdx = -1;
+    selectedSegmentIndices.clear();
     currentPosMs = 0;
+    currentAudioTrack = 0;
+    totalAudioTracks = 1;
+    hasVideoStream = true;
+    hasAudioStream = true;
     isExporting = false;
+}
+
+void TimelineWidget::setMediaSource(const QUrl &url) {
+    currentFileUrl = url;
+    resetMediaState();
 
     const QFile file(url.toLocalFile());
     originalFileSize = file.size();
 
     thumbPlayer->setSource(url);
     detectAudioTracks(url.toLocalFile());
-    loadAudioFast(url.toLocalFile());
+    if (hasAudioStream) {
+        loadAudioFast(url.toLocalFile());
+    } else {
+        audioSamples.clear();
+    }
 
     this->updateGeometry();
     this->update();

@@ -21,13 +21,16 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QScrollArea>
+#include <QFrame>
+#include <QVBoxLayout>
+#include <QDialog>
 
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     MainWindow(QWidget *parent = nullptr);
-    const QString CURRENT_VERSION = "v1.0.38";
+    const QString CURRENT_VERSION = "v1.0.39";
     void downloadUpdate(const QString &url);
     void finalizeUpdate();
     void checkForUpdates();
@@ -41,6 +44,10 @@ private:
     void setupUi();
     void setupConnections();
     void loadInitialVideo();
+    void toggleVideoFullscreen();
+    void restoreVideoFromFullscreen();
+    void refreshMediaState();
+    QStringList collectRecentMediaFiles() const;
     QLineEdit* exportInput;
     QVBoxLayout* mainLayout;
     QFrame* toolbar;
@@ -48,10 +55,22 @@ private:
     QWidget* timelineTools;
     TimelineWidget* timeline;
     QFrame* workspace;
+    QVBoxLayout* stageColumnLayout;
+    QFrame* previewHeader;
+    QFrame* videoContainer;
+    QWidget* videoFullscreenPlaceholder;
+    QDialog* videoFullscreenDialog;
     VideoWithCropWidget* videoWithCrop;
     QPushButton* fullscreenBtn;
+    QPushButton* importBtn;
     QPushButton* playPauseBtn;
+    QPushButton* autoCutBtn;
+    QPushButton* resetCropBtn;
     QLabel* statusLabel;
+    QLabel* currentMediaLabel;
+    QLabel* transportHintLabel;
+    QLabel* sidebarCountLabel;
+    QLabel* sidebarEmptyLabel;
     QSlider* volSlider;
     // Media
     QMediaPlayer* player;
@@ -65,6 +84,7 @@ private:
     QScrollArea* sidebarScroll;
     QWidget* sidebarContent;
     QVBoxLayout* sidebarListLayout;
+    QString currentMediaPath;
     // --- NEW HELPER FUNCTIONS ---
     void loadClipDirectly(const QString &filePath);
     void updateSidebar();

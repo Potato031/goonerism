@@ -11,17 +11,17 @@
 #include <QDir>
 #include <QDebug>
 #include <QApplication>
+#include <functional>
 #include "timelinewidget.h"
+#include "mediautils.h"
 
 class DropFilter : public QObject {
     Q_OBJECT
-    QMediaPlayer* m_player;
-    TimelineWidget* m_timeline;
-    QLabel* m_status;
+    std::function<void(const QString&)> m_openMedia;
 
 public:
-    DropFilter(QMediaPlayer* p, TimelineWidget* t, QLabel* s)
-        : m_player(p), m_timeline(t), m_status(s) {}
+    explicit DropFilter(std::function<void(const QString&)> openMedia, QObject *parent = nullptr)
+        : QObject(parent), m_openMedia(std::move(openMedia)) {}
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override {
@@ -42,23 +42,8 @@ protected:
 
                 qDebug() << "Detected Drop Path:" << filePath;
 
-                if (!filePath.isEmpty()) {
-                    static const QStringList formats = {"mp4", "mkv", "mov", "avi", "webm"};
-                    QFileInfo info(filePath);
-
-                    if (formats.contains(info.suffix().toLower())) {
-                        m_player->stop();
-
-                        QUrl localUrl = QUrl::fromLocalFile(filePath);
-                        m_player->setSource(localUrl);
-                        m_timeline->setMediaSource(localUrl);
-
-                        m_player->play();
-
-                        if (m_status) {
-                            m_status->setText(QDir::toNativeSeparators(info.fileName()).toUpper());
-                        }
-                    }
+                if (!filePath.isEmpty() && MediaUtils::isSupportedMediaFile(filePath) && m_openMedia) {
+                    m_openMedia(filePath);
                 }
             }
             dropEvent->acceptProposedAction();

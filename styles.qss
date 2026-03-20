@@ -1,77 +1,204 @@
-/* Global Reset & Typography */
 QWidget {
-    background-color: #040605; /* Deep Forest Black */
-    color: #A0ACA4;
+    background-color: #040605;
+    color: #c8d4cc;
     font-size: 13px;
     outline: none;
 }
 
-/* Main Window Container */
-#MainCanvas {
-    background-color: #080B09;
-    border: 1px solid #1A221C;
+QMainWindow#MainCanvas,
+QWidget#centralWidget {
+    background: #040605;
+}
+
+QFrame#toolbar,
+QFrame#workspace,
+QFrame#footer,
+QFrame#clipSidebar,
+QFrame#PanelHeader,
+QFrame#VideoContainer,
+QWidget#timelineTools {
+    background-color: #080b09;
+    border: 1px solid #1a221c;
     border-radius: 12px;
 }
 
-/* Video Section */
-#VideoContainer {
-    background-color: #000000;
-    border: 1px solid #222B25;
-    border-radius: 8px;
+QFrame#toolbar {
+    background-color: #080b09;
 }
 
-/* The Action Button - Emerald Gradient */
+QFrame#footer {
+    background-color: #070907;
+}
+
+QFrame#PanelHeader {
+    border-radius: 10px;
+    background-color: #0b0f0c;
+}
+
+QWidget#timelineTools {
+    background-color: #0b0f0c;
+    border-radius: 10px;
+}
+
+QFrame#VideoContainer {
+    background-color: #000000;
+}
+
+VideoWithCropWidget#VideoSurface {
+    border-radius: 10px;
+    background-color: #030403;
+}
+
+QLabel#LogoBold {
+    color: #ffffff;
+    font-size: 20px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    background: transparent;
+}
+
+QLabel#LogoLight {
+    color: #50c878;
+    font-size: 20px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    background: transparent;
+}
+
+QLabel#CurrentMediaPill,
+QLabel#MiniBadge {
+    background-color: #0f1612;
+    border: 1px solid #1d2921;
+    border-radius: 9px;
+    color: #9ec9ab;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    padding: 5px 10px;
+}
+
+QLabel#SectionLabel,
+QLabel#InputLabel {
+    color: #4a5c50;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    background: transparent;
+}
+
+QLabel#SubtleHint,
+QLabel#MetaData,
+QLabel#VersionLabel,
+QLabel#EmptyStateLabel {
+    color: #607568;
+    background: transparent;
+}
+
+QLabel#SidebarTitle {
+    color: #f1f5f2;
+    font-size: 11px;
+    font-weight: 800;
+    background: transparent;
+}
+
+QLabel {
+    background: transparent;
+}
+
 QPushButton#ActionBtn {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #50C878, stop:1 #2E8B57);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #50c878, stop:1 #2e8b57);
     border: none;
     border-radius: 22px;
     color: #000000;
     font-size: 11px;
     letter-spacing: 2px;
     font-weight: 900;
-    text-transform: uppercase;
+    padding: 0 18px;
 }
 
 QPushButton#ActionBtn:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #72E095, stop:1 #50C878);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #72e095, stop:1 #50c878);
 }
 
-QPushButton#ActionBtn[state="playing"] {
+QPushButton#ActionBtn[playing="true"] {
     background: #000000;
-    color: #50C878;
-    border: 2px solid #50C878;
+    color: #50c878;
+    border: 2px solid #50c878;
 }
 
-/* Tool Buttons - Dark Ivy Look */
+QPushButton#PrimaryGhostBtn,
 QPushButton[class="ToolBtn"] {
-    background-color: #0F1612;
-    border: 1px solid #1D2921;
-    border-radius: 4px;
-    color: #607568;
+    background-color: #0f1612;
+    border: 1px solid #1d2921;
+    border-radius: 6px;
+    color: #a9bbb0;
     font-weight: 800;
     font-size: 10px;
-    padding: 5px 10px;
+    letter-spacing: 1px;
+    padding: 0 14px;
 }
 
+QPushButton#PrimaryGhostBtn:hover,
 QPushButton[class="ToolBtn"]:hover {
-    background-color: #16221B;
-    border-color: #50C878;
-    color: #E0F2E9;
+    background-color: #16221b;
+    border-color: #50c878;
+    color: #eef7f1;
 }
 
+QPushButton#PrimaryGhostBtn {
+    background-color: #102015;
+    color: #d8f4df;
+}
 
-/* Sleek Sliders - Mint Accents */
+QPushButton[class="ToolBtn"]:disabled,
+QPushButton#FullscreenBtn:disabled {
+    color: #4d5f54;
+    border-color: #18211b;
+    background-color: #0b100d;
+}
+
+QPushButton#FullscreenBtn {
+    background-color: rgba(0, 0, 0, 160);
+    border: 1px solid #223229;
+    color: #ffffff;
+    border-radius: 8px;
+    font-size: 18px;
+    margin: 10px;
+}
+
+QPushButton#FullscreenBtn:hover {
+    background-color: #16221b;
+    border-color: #50c878;
+}
+
+QLineEdit#ExportNameInput {
+    background-color: #000000;
+    border: 1px solid #1d2921;
+    border-radius: 8px;
+    padding: 9px 12px;
+    color: #50c878;
+    font-size: 12px;
+    selection-background-color: #2e8b57;
+}
+
+QLineEdit#ExportNameInput:focus {
+    border: 1px solid #50c878;
+    background-color: #080b09;
+}
+
 QSlider::groove:horizontal {
-    height: 2px;
-    background: #1A241E;
+    height: 3px;
+    background: #1a241e;
+    border-radius: 2px;
 }
 
 QSlider::sub-page:horizontal {
-    background: #50C878;
+    background: #50c878;
+    border-radius: 2px;
 }
 
 QSlider::handle:horizontal {
-    background: #50C878;
+    background: #50c878;
     border: 1px solid #000000;
     width: 12px;
     height: 12px;
@@ -79,80 +206,92 @@ QSlider::handle:horizontal {
     border-radius: 6px;
 }
 
-/* Industrial Export Input */
-QLineEdit#ExportNameInput {
-    background-color: #000000;
-    border: 1px solid #1D2921;
-    border-radius: 4px;
-    padding: 6px 12px;
-    color: #50C878;
-    font-weight: 800;
-    font-size: 12px;
+QScrollArea {
+    background: transparent;
+    border: none;
 }
 
-QLineEdit#ExportNameInput:focus {
-    border: 1px solid #50C878;
-    background-color: #080B09;
+QScrollBar:vertical {
+    width: 10px;
+    background: transparent;
+    margin: 6px 0;
 }
 
-/* Labels */
-QLabel#MetaData, #InputLabel {
-    color: #4A5C50;
-    font-weight: 800;
-    font-size: 9px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
+QScrollBar::handle:vertical {
+    background: #213028;
+    border-radius: 5px;
+    min-height: 24px;
 }
 
-/* Notifications */
-QWidget#ProgressNotificationBg {
-    background-color: #080B09;
-    border: 2px solid #50C878;
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+QWidget#SidebarItem {
+    background-color: #0f1612;
+    border: 1px solid #1d2921;
     border-radius: 10px;
 }
 
+QWidget#SidebarItem[active="true"] {
+    background-color: #152019;
+    border: 1px solid #50c878;
+}
+
+QWidget#SidebarItem:hover {
+    background-color: #16221b;
+    border: 1px solid #50c878;
+}
+
+QWidget#ProgressNotificationBg {
+    background-color: #080b09;
+    border: 2px solid #50c878;
+    border-radius: 10px;
+}
+
+QLabel#ProgressNotificationLabel {
+    color: #eef8f1;
+    background: transparent;
+    font-weight: 700;
+}
+
+QProgressBar#ProgressNotificationBar {
+    background-color: #060706;
+    border: 1px solid #172019;
+    border-radius: 6px;
+    text-align: center;
+    color: #e4f5e9;
+}
+
 QProgressBar#ProgressNotificationBar::chunk {
-    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #50C878, stop:1 #00FF7F);
-    border-radius: 4px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #50c878, stop:1 #00ff7f);
+    border-radius: 5px;
 }
 
 QWidget#ToastNotification QLabel#ToastLabel {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #50C878, stop:1 #2E8B57);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #50c878, stop:1 #2e8b57);
     color: #000000;
+    border-radius: 10px;
     font-weight: 900;
 }
 
-QLabel#LogoBold {
-    color: #FFFFFF;
-    font-weight: 900;
-    font-size: 18px;
-    background: transparent;
-}
-
-
-/* Logos */
-QLabel#LogoLight {
-    color: #50C878;
-    font-weight: 900;
-    font-size: 18px;
-    background: transparent;
-}
-
-/* The Timeline Properties */
 TimelineWidget {
-    qproperty-accentColor: #50C878;       /* Emerald */
-    qproperty-secondaryColor: #00FA9A;    /* Medium Spring Green */
-    qproperty-backgroundColor: #040605;   /* Deep Dark Green */
-    qproperty-trackColor: #121A15;        /* Dark Moss */
-    qproperty-waveformColor: #355E3B;     /* Hunter Green */
+    background: transparent;
+    qproperty-accentColor: #50c878;
+    qproperty-secondaryColor: #00fa9a;
+    qproperty-backgroundColor: #040605;
+    qproperty-trackColor: #121a15;
+    qproperty-waveformColor: #355e3b;
 }
 
 TimelineWidget:focus {
-    border: 1px solid #50C878;
+    border: 1px solid #50c878;
+    border-radius: 10px;
 }
 
 VideoWithCropWidget {
-    qproperty-accentColor: #50C878;       /* Emerald Crop Box */
-    qproperty-secondaryColor: #00FA9A;    /* Mint Filter Box */
-    qproperty-backgroundColor: #040605;   /* Background Letterboxing */
+    qproperty-accentColor: #50c878;
+    qproperty-secondaryColor: #00fa9a;
+    qproperty-backgroundColor: #040605;
 }
