@@ -74,15 +74,22 @@ public:
         QRect bounds = rect().adjusted(10, 10, -10, -10);
         if (lastFrame.isNull()) return bounds;
 
-        float imgRatio = static_cast<float>(lastFrame.width()) / lastFrame.height();
-        float widgetRatio = static_cast<float>(bounds.width()) / bounds.height();
-        if (imgRatio > widgetRatio) {
-            int h = bounds.width() / imgRatio;
-            return QRect(bounds.x(), bounds.y() + (bounds.height() - h) / 2, bounds.width(), h);
-        } else {
-            int w = bounds.height() * imgRatio;
-            return QRect(bounds.x() + (bounds.width() - w) / 2, bounds.y(), w, bounds.height());
+        const float imgRatio = static_cast<float>(lastFrame.width()) / qMax(1, lastFrame.height());
+        const float boundsRatio = static_cast<float>(bounds.width()) / qMax(1, bounds.height());
+
+        if (imgRatio > boundsRatio) {
+            const int fittedHeight = qRound(bounds.width() / imgRatio);
+            return QRect(bounds.x(),
+                         bounds.y() + (bounds.height() - fittedHeight) / 2,
+                         bounds.width(),
+                         fittedHeight);
         }
+
+        const int fittedWidth = qRound(bounds.height() * imgRatio);
+        return QRect(bounds.x() + (bounds.width() - fittedWidth) / 2,
+                     bounds.y(),
+                     fittedWidth,
+                     bounds.height());
     }
 
 signals:
@@ -107,6 +114,7 @@ protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, false);
         p.fillRect(rect(), m_backgroundColor);
 
         if (lastFrame.isNull()) {
@@ -150,7 +158,8 @@ protected:
         }
         ip.end();
 
-        p.drawImage(tr, processedFrame);
+        QImage previewFrame = processedFrame.scaled(tr.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
+        p.drawImage(tr.topLeft(), previewFrame);
 
         const int cropX = tr.x() + qRound(cropL * tr.width());
         const int cropY = tr.y() + qRound(cropT * tr.height());

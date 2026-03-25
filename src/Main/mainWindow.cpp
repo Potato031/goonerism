@@ -186,7 +186,7 @@ void MainWindow::setupUi() {
 
     videoContainer = new QFrame();
     videoContainer->setObjectName("VideoContainer");
-    videoContainer->setMinimumHeight(400);
+    videoContainer->setMinimumHeight(160);
     auto* videoLayout = new QGridLayout(videoContainer);
     videoLayout->setContentsMargins(12, 12, 12, 12);
 
