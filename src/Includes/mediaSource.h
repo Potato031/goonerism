@@ -71,15 +71,17 @@ public:
     }
 
     QRect calculateTargetRect() {
-        if (lastFrame.isNull()) return rect();
+        QRect bounds = rect().adjusted(10, 10, -10, -10);
+        if (lastFrame.isNull()) return bounds;
+
         float imgRatio = static_cast<float>(lastFrame.width()) / lastFrame.height();
-        float widgetRatio = static_cast<float>(width()) / height();
+        float widgetRatio = static_cast<float>(bounds.width()) / bounds.height();
         if (imgRatio > widgetRatio) {
-            int h = width() / imgRatio;
-            return QRect(0, (height() - h) / 2, width(), h);
+            int h = bounds.width() / imgRatio;
+            return QRect(bounds.x(), bounds.y() + (bounds.height() - h) / 2, bounds.width(), h);
         } else {
-            int w = height() * imgRatio;
-            return QRect((width() - w) / 2, 0, w, height());
+            int w = bounds.height() * imgRatio;
+            return QRect(bounds.x() + (bounds.width() - w) / 2, bounds.y(), w, bounds.height());
         }
     }
 
@@ -149,6 +151,21 @@ protected:
         ip.end();
 
         p.drawImage(tr, processedFrame);
+
+        const int cropX = tr.x() + qRound(cropL * tr.width());
+        const int cropY = tr.y() + qRound(cropT * tr.height());
+        const int cropW = qRound((cropR - cropL) * tr.width());
+        const int cropH = qRound((cropB - cropT) * tr.height());
+        const QRect cropRect(cropX, cropY, cropW, cropH);
+
+        p.save();
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 105));
+        p.drawRect(QRect(tr.left(), tr.top(), tr.width(), qMax(0, cropRect.top() - tr.top())));
+        p.drawRect(QRect(tr.left(), cropRect.bottom(), tr.width(), qMax(0, tr.bottom() - cropRect.bottom())));
+        p.drawRect(QRect(tr.left(), cropRect.top(), qMax(0, cropRect.left() - tr.left()), cropRect.height()));
+        p.drawRect(QRect(cropRect.right(), cropRect.top(), qMax(0, tr.right() - cropRect.right()), cropRect.height()));
+        p.restore();
 
         for (int i = 0; i < filterObjects.size(); ++i) {
             drawSelectionUI(p, tr, filterObjects[i].l, filterObjects[i].t, filterObjects[i].r, filterObjects[i].b, m_secondaryColor, (selectedFilterIdx == i && adjustingFilter));

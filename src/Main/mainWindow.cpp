@@ -50,7 +50,6 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     }, this);
     qApp->installEventFilter(filter);
     setupConnections();
-    checkForUpdates();
     loadInitialVideo();
 }
 
@@ -195,7 +194,6 @@ void MainWindow::setupUi() {
     videoWithCrop->setObjectName("VideoSurface");
     videoWithCrop->setPlaceholderState("Import media to start editing",
                                        "Video appears here. Audio-only files can still be trimmed, auto-cut, and exported.");
-    videoContainer->installEventFilter(new ResizeFilter(videoWithCrop));
     videoLayout->addWidget(videoWithCrop, 0, 0);
 
     fullscreenBtn = new QPushButton("⛶");
@@ -651,10 +649,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
 }
 
 void MainWindow::loadInitialVideo() {
-    const QStringList recentFiles = collectRecentMediaFiles();
-    if (!recentFiles.isEmpty()) {
-        loadClipDirectly(recentFiles.first());
-    } else {
-        refreshMediaState();
-    }
+    // Keep startup responsive by showing the empty editor first instead of
+    // probing and decoding the newest media file during window construction.
+    refreshMediaState();
 }

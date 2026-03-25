@@ -2,8 +2,11 @@
 #include <QDir>
 #include <QFile>
 #include <QPainter>
+#include <QPointer>
+#include <QQueue>
 #include <QTimer>
 #include <QCoreApplication>
+#include <functional>
 #include "../Includes/mediautils.h"
 
 // Redefining the helper here so PreviewLabel knows where to find FFmpeg on Windows
@@ -14,6 +17,31 @@ static QString getFFmpegPath() {
 #else
     return "ffmpeg";
 #endif
+}
+
+QQueue<std::function<void()>> g_previewJobs;
+bool g_previewJobRunning = false;
+
+void startNextPreviewJob() {
+    if (g_previewJobRunning || g_previewJobs.isEmpty()) {
+        return;
+    }
+
+    g_previewJobRunning = true;
+    auto job = g_previewJobs.dequeue();
+    job();
+}
+
+void enqueuePreviewJob(std::function<void()> job) {
+    g_previewJobs.enqueue(std::move(job));
+    startNextPreviewJob();
+}
+
+void finishPreviewJob() {
+    g_previewJobRunning = false;
+    QTimer::singleShot(0, []() {
+        startNextPreviewJob();
+    });
 }
 
 PreviewLabel::PreviewLabel(const QString &videoPath, QWidget *parent)
@@ -43,23 +71,29 @@ void PreviewLabel::generatePreview() {
         }
     }
 
-    QTimer::singleShot(250, this, [this, outPath]() {
-        QStringList args;
-        // Using the helper here instead of the raw "ffmpeg" string
-        args << "-y" << "-ss" << "0" << "-t" << "10" << "-i" << path
-             << "-vf" << "fps=1,scale=160:-1,tile=10x1"
-             << "-frames:v" << "1" << "-preset" << "ultrafast" << outPath;
-
-        QProcess *ffmpeg = new QProcess(this);
-        connect(ffmpeg, &QProcess::finished, [this, outPath, ffmpeg]() {
-            if (filmstrip.load(outPath)) {
-                updatePreview(0);
+    QTimer::singleShot(250, this, [self = QPointer<PreviewLabel>(this), outPath]() {
+        enqueuePreviewJob([self, outPath]() {
+            if (!self) {
+                finishPreviewJob();
+                return;
             }
-            ffmpeg->deleteLater();
-        });
 
-        // Start using the resolved path
-        ffmpeg->start(getFFmpegPath(), args);
+            QStringList args;
+            args << "-y" << "-ss" << "0" << "-t" << "10" << "-i" << self->path
+                 << "-vf" << "fps=1,scale=160:-1,tile=10x1"
+                 << "-frames:v" << "1" << "-preset" << "ultrafast" << outPath;
+
+            QProcess *ffmpeg = new QProcess(self);
+            QObject::connect(ffmpeg, &QProcess::finished, self, [self, outPath, ffmpeg]() {
+                if (self && self->filmstrip.load(outPath)) {
+                    self->updatePreview(0);
+                }
+                ffmpeg->deleteLater();
+                finishPreviewJob();
+            });
+
+            ffmpeg->start(getFFmpegPath(), args);
+        });
     });
 }
 
