@@ -82,7 +82,11 @@ void TimelineWidget::autoCutSilence() {
     }
 
     // This filter tells FFmpeg: "Only process audio if the time is within my segments"
-    QString selectFilter = QString("aselect='%1',silencedetect=noise=-45dB:d=0.3").arg(filterParts.join("+"));
+    const auto settings = autoCutSettings;
+    QString selectFilter = QString("aselect='%1',silencedetect=noise=%2dB:d=%3")
+                               .arg(filterParts.join("+"))
+                               .arg(settings.silenceThresholdDb, 0, 'f', 1)
+                               .arg(settings.minimumSilenceDurationSec, 0, 'f', 2);
 
     QStringList args;
     args << "-i" << currentFileUrl.toLocalFile()
@@ -91,7 +95,7 @@ void TimelineWidget::autoCutSilence() {
          << "-f" << "null" << "-";
 
     QProcess* ffmpeg = new QProcess(this);
-    connect(ffmpeg, &QProcess::finished, [this, ffmpeg, originalWorkArea]() {
+    connect(ffmpeg, &QProcess::finished, [this, ffmpeg, originalWorkArea, settings]() {
         QString output = ffmpeg->readAllStandardError();
 
         QList<double> silenceStarts;
@@ -110,7 +114,8 @@ void TimelineWidget::autoCutSilence() {
             showNotification("NO SILENCE FOUND IN TRIMMED AREA");
         } else {
             QList<Segment> newSegments;
-            constexpr double padding = 0.15; // Slightly tighter padding for auto-cut
+            const double padding = settings.paddingSec;
+            const double minimumClipDuration = settings.minimumClipDurationSec;
 
             // Process each original segment and "sub-cut" it based on detected silence
             for (const auto& area : originalWorkArea) {
@@ -125,7 +130,7 @@ void TimelineWidget::autoCutSilence() {
                     // If the silence is inside our current segment
                     if (sStart > areaStart && sStart < areaEnd) {
                         // Add the "loud" part before this silence
-                        if (sStart - lastProcessed > 0.1) {
+                        if (sStart - lastProcessed > minimumClipDuration) {
                             Segment s;
                             s.startMs = qMax(areaStart, lastProcessed - (lastProcessed == areaStart ? 0 : padding)) * 1000;
                             s.endMs = qMin(areaEnd, sStart + padding) * 1000;
@@ -136,7 +141,7 @@ void TimelineWidget::autoCutSilence() {
                 }
 
                 // Add the remaining "loud" part after the last silence in this area
-                if (areaEnd - lastProcessed > 0.1) {
+                if (areaEnd - lastProcessed > minimumClipDuration) {
                     Segment s;
                     s.startMs = qMax(areaStart, lastProcessed - padding) * 1000;
                     s.endMs = areaEnd * 1000;
@@ -147,6 +152,7 @@ void TimelineWidget::autoCutSilence() {
             if (!newSegments.isEmpty()) {
                 segments = newSegments;
                 showNotification(QString("CLEANED: %1 CLIPS").arg(segments.size()));
+                emit clipTrimmed();
             }
             update();
         }

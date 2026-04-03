@@ -1,73 +1,86 @@
 #include "../Includes/timelinewidget.h"
+#include "../Includes/mainWindow.h"
+
+namespace {
+bool matchesShortcut(QKeyEvent *event, const QString &shortcut) {
+    const QKeySequence configured = QKeySequence::fromString(shortcut, QKeySequence::PortableText);
+    if (configured.isEmpty()) return false;
+    const int pressed = static_cast<int>(event->modifiers()) | event->key();
+    return QKeySequence(pressed).matches(configured) == QKeySequence::ExactMatch;
+}
+}
 
 void TimelineWidget::keyPressEvent(QKeyEvent *event) {
-    bool ctrl = event->modifiers() & Qt::ControlModifier;
-    bool shift = event->modifiers() & Qt::ShiftModifier;
-    bool alt = event->modifiers() & Qt::AltModifier;
+    const auto settings = playbackSettings;
+    auto *mainWindow = qobject_cast<MainWindow*>(window());
+    const auto editorSettings = mainWindow ? mainWindow->getEditorSettings() : MainWindow::EditorSettings{};
 
-    if (event->key() == Qt::Key_Q || event->key() == Qt::Key_0) {
-        currentPosMs = qMax(0LL, currentPosMs - 2000);
+    if (matchesShortcut(event, editorSettings.keyReplay) || event->key() == Qt::Key_0) {
+        currentPosMs = qMax<qint64>(0LL, currentPosMs - settings.majorSeekMs);
         emit playheadMoved(currentPosMs);
         showNotification("⏪ REPLAY");
         update();
         return;
     }
 
-    if (event->key() == Qt::Key_W) {
-        currentPosMs = qMin(durationMs, currentPosMs + 2000);
+    if (matchesShortcut(event, editorSettings.keyForward)) {
+        currentPosMs = qMin(durationMs, currentPosMs + settings.majorSeekMs);
         emit playheadMoved(currentPosMs);
         update();
         return;
     }
 
-    if (event->key() == Qt::Key_Left) {
-        currentPosMs = qMax(0LL, currentPosMs - 16);
+    if (matchesShortcut(event, editorSettings.keyStepBack)) {
+        currentPosMs = qMax<qint64>(0LL, currentPosMs - settings.minorSeekMs);
         emit playheadMoved(currentPosMs);
         update();
         return;
     }
-    else if (event->key() == Qt::Key_Right) {
-        currentPosMs = qMin(durationMs, currentPosMs + 16);
+    else if (matchesShortcut(event, editorSettings.keyStepForward)) {
+        currentPosMs = qMin(durationMs, currentPosMs + settings.minorSeekMs);
         emit playheadMoved(currentPosMs);
         update();
         return;
     }
 
-    if (ctrl && !shift && event->key() == Qt::Key_Z) {
+    if (matchesShortcut(event, editorSettings.keyUndo)) {
         undo();
         showNotification("UNDO");
         return;
     }
-    else if (ctrl && shift && event->key() == Qt::Key_Z) {
+    else if (matchesShortcut(event, editorSettings.keyRedo)) {
         redo();
         showNotification("REDO");
         return;
     }
 
-    else if (ctrl && event->key() == Qt::Key_G) {
+    else if (matchesShortcut(event, editorSettings.keyExportGif)) {
         copyTrimmedGif();
     }
-    else if (ctrl && shift && event->key() == Qt::Key_C) {
+    else if (matchesShortcut(event, editorSettings.keyExportAudio)) {
         copyTrimmedAudio();
     }
-    else if (ctrl && event->key() == Qt::Key_C) {
-        if (alt) copyTrimmedVideoMuted();
-        else copyTrimmedVideo();
+    else if (matchesShortcut(event, editorSettings.keyExportMutedVideo)) {
+        copyTrimmedVideoMuted();
+    }
+    else if (matchesShortcut(event, editorSettings.keyExportVideo)) {
+        copyTrimmedVideo();
     }
 
-    else if (event->key() == Qt::Key_Space) {
+    else if (matchesShortcut(event, editorSettings.keyPlayPause)) {
         emit requestTogglePlayback();
         event->accept();
     }
-    else if (event->key() == Qt::Key_S) {
+    else if (matchesShortcut(event, editorSettings.keySplit)) {
         saveState();
         splitAtPlayhead();
     }
-    else if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
+    else if (matchesShortcut(event, editorSettings.keyDeleteClip) || event->key() == Qt::Key_Backspace) {
         QSet<int> toDelete = selectedSegmentIndices;
         if (selectedSegmentIdx != -1) toDelete.insert(selectedSegmentIdx);
 
         if (!toDelete.isEmpty()) {
+            saveState();
 
             QList<int> sortedIndices = toDelete.values();
             std::sort(sortedIndices.begin(), sortedIndices.end(), std::greater<int>());
@@ -81,13 +94,14 @@ void TimelineWidget::keyPressEvent(QKeyEvent *event) {
             selectedSegmentIndices.clear();
             selectedSegmentIdx = -1;
             showNotification(QString("DELETED %1 CLIPS").arg(sortedIndices.size()));
+            emit clipTrimmed();
             update();
             return;
         }
     }
 
     // Inside keyPressEvent, under the alt + A logic:
-    else if (alt && event->key() == Qt::Key_A) {
+    else if (matchesShortcut(event, editorSettings.keyCycleAudioTrack)) {
         if (totalAudioTracks > 1) {
             currentAudioTrack = (currentAudioTrack + 1) % totalAudioTracks;
 

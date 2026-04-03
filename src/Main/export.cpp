@@ -7,10 +7,12 @@
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QSettings>
 #include <QTime>
 
 #include "../Includes/timelinewidget.h"
 #include "../Includes/mediaSource.h"
+#include "../Includes/appsettings.h"
 
 static QString getFFmpegPath() {
 #ifdef Q_OS_WIN
@@ -28,16 +30,23 @@ static bool hasNvidiaEncoder() {
 }
 
 static QString getExportDir() {
-    QString path = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation) + "/Edited";
+    QSettings settings = makeAppSettings();
+    QString path = settings.value("export/exportDirectory",
+                                  QStandardPaths::writableLocation(QStandardPaths::MoviesLocation) + "/Edited").toString();
     QDir().mkpath(path);
     return path;
 }
 
-static QString buildFilterChain(int vidW, int vidH, const QList<VideoWithCropWidget::FilterObject>& filterList) {
-    if (filterList.isEmpty()) return "[0:v]null[filtered];";
+static QString buildFilterChain(const QString &inputLabel,
+                                const QString &outputLabel,
+                                const QString &prefix,
+                                int vidW,
+                                int vidH,
+                                const QList<VideoWithCropWidget::FilterObject>& filterList) {
+    if (filterList.isEmpty()) return QString("%1null%2;").arg(inputLabel, outputLabel);
 
     QString chain;
-    QString lastOutput = "[0:v]";
+    QString lastOutput = inputLabel;
 
     for (int i = 0; i < filterList.size(); ++i) {
         const auto& obj = filterList[i];
@@ -51,22 +60,30 @@ static QString buildFilterChain(int vidW, int vidH, const QList<VideoWithCropWid
 
         if (absW <= 0 || absH <= 0) continue;
 
-        QString currentStepLabel = QString("[v_step%1]").arg(i);
+        QString currentStepLabel = QString("[%1_step%2]").arg(prefix).arg(i);
+        QString baseLabel = QString("[%1_base%2]").arg(prefix).arg(i);
+        QString maskLabel = QString("[%1_mask%2]").arg(prefix).arg(i);
 
         if (obj.mode == 0) { // Blur
-            chain += QString("%1split[base][mask];[mask]crop=%2:%3:%4:%5,boxblur=20[blur];[base][blur]overlay=%4:%5%6; ")
-                     .arg(lastOutput).arg(absW).arg(absH).arg(absX).arg(absY).arg(currentStepLabel);
+            QString blurLabel = QString("[%1_blur%2]").arg(prefix).arg(i);
+            chain += QString("%1split=2%2%3;%3crop=%4:%5:%6:%7,boxblur=20%8;%2%8overlay=%6:%7%9;")
+                         .arg(lastOutput, baseLabel, maskLabel)
+                         .arg(absW).arg(absH).arg(absX).arg(absY)
+                         .arg(blurLabel, currentStepLabel);
         } else if (obj.mode == 1) { // Pixelate
-            chain += QString("%1split[base][mask];[mask]crop=%2:%3:%4:%5,scale=iw/30:-1,scale=%2:%3:flags=neighbor[px];[base][px]overlay=%4:%5%6; ")
-                     .arg(lastOutput).arg(absW).arg(absH).arg(absX).arg(absY).arg(currentStepLabel);
+            QString pixelLabel = QString("[%1_px%2]").arg(prefix).arg(i);
+            chain += QString("%1split=2%2%3;%3crop=%4:%5:%6:%7,scale=iw/30:-1,scale=%4:%5:flags=neighbor%8;%2%8overlay=%6:%7%9;")
+                         .arg(lastOutput, baseLabel, maskLabel)
+                         .arg(absW).arg(absH).arg(absX).arg(absY)
+                         .arg(pixelLabel, currentStepLabel);
         } else { // Blackout
-            chain += QString("%1drawbox=x=%2:y=%3:w=%4:h=%5:color=black:t=fill%6; ")
-                     .arg(lastOutput).arg(absX).arg(absY).arg(absW).arg(absH).arg(currentStepLabel);
+            chain += QString("%1drawbox=x=%2:y=%3:w=%4:h=%5:color=black:t=fill%6;")
+                         .arg(lastOutput).arg(absX).arg(absY).arg(absW).arg(absH).arg(currentStepLabel);
         }
         lastOutput = currentStepLabel;
     }
 
-    chain += QString("%1copy[filtered];").arg(lastOutput);
+    chain += QString("%1copy%2;").arg(lastOutput, outputLabel);
     return chain;
 }
 void TimelineWidget::copyTrimmedVideo() {
@@ -104,19 +121,24 @@ void TimelineWidget::copyTrimmedVideo() {
     qint64 totalMs = 0;
     for (const auto& seg : segments) totalMs += (seg.endMs - seg.startMs);
     const double durationSec = qMax(0.1, totalMs / 1000.0);
+    const auto exportSettings = this->exportSettings;
 
     isExporting = true;
     const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
-
-    // 2. Build Filter Chain
-    QString filter = buildFilterChain(vidW, vidH, filters);
+    QString filter;
 
     for (int i = 0; i < segments.size(); ++i) {
         double s = (segments[i].startMs / 1000.0) - seekStart;
         double d = (segments[i].endMs - segments[i].startMs) / 1000.0;
 
-        filter += QString("[filtered]trim=start=%1:duration=%2,setpts=PTS-STARTPTS[v%3];")
+        filter += QString("[0:v]trim=start=%1:duration=%2,setpts=PTS-STARTPTS[segment_v%3];")
                   .arg(qMax(0.0, s)).arg(d).arg(i);
+        filter += buildFilterChain(QString("[segment_v%1]").arg(i),
+                                   QString("[v%1]").arg(i),
+                                   QString("seg%1").arg(i),
+                                   vidW,
+                                   vidH,
+                                   filters);
 
         filter += QString("[0:a:%1]atrim=start=%2:duration=%3,asetpts=PTS-STARTPTS,volume=%4,aresample=async=1[a%5];")
                   .arg(currentAudioTrack).arg(qMax(0.0, s)).arg(d).arg(segments[i].gain).arg(i);
@@ -132,7 +154,7 @@ void TimelineWidget::copyTrimmedVideo() {
 
     double originalBitrateKbps = (originalFileSize * 8.0) / (durationMs / 1000.0) / 1000.0;
     double estimatedSizeMB = (originalBitrateKbps * durationSec) / 8192.0;
-    bool shouldCompress = (estimatedSizeMB >= 8);
+    bool shouldCompress = (estimatedSizeMB >= exportSettings.videoCompressionThresholdMB);
 
     QStringList args;
     args << "-y" << "-ss" << QString::number(seekStart) << "-i" << inputPath;
@@ -140,8 +162,8 @@ void TimelineWidget::copyTrimmedVideo() {
     args << "-map" << "[outv]" << "-map" << "[outa]";
 
     if (shouldCompress) {
-        double targetSizeBytes = 7.1 * 1024 * 1024;
-        double audioBitrateBps = 128000;
+        double targetSizeBytes = exportSettings.targetCompressedSizeMB * 1024 * 1024;
+        double audioBitrateBps = exportSettings.compressedAudioBitrateKbps * 1000.0;
         double videoBitrateKbps = qBound(200.0, (targetSizeBytes * 8 / durationSec - audioBitrateBps) / 1000.0, 12000.0);
 
         if (hasNvidiaEncoder()) {
@@ -154,7 +176,7 @@ void TimelineWidget::copyTrimmedVideo() {
              << "-maxrate" << QString("%1k").arg(static_cast<int>(videoBitrateKbps * 1.5))
              << "-bufsize" << QString("%1k").arg(static_cast<int>(videoBitrateKbps * 2));
 
-        args << "-c:a" << "aac" << "-b:a" << "128k";
+        args << "-c:a" << "aac" << "-b:a" << QString("%1k").arg(exportSettings.compressedAudioBitrateKbps);
     } else {
         int targetK = static_cast<int>(originalBitrateKbps);
 
@@ -165,7 +187,7 @@ void TimelineWidget::copyTrimmedVideo() {
             args << "-c:v" << "libx264" << "-preset" << "slow" << "-crf" << "18"
                  << "-maxrate" << QString("%1k").arg(targetK) << "-bufsize" << QString("%1k").arg(targetK * 2);
         }
-        args << "-c:a" << "aac" << "-b:a" << "192k";
+        args << "-c:a" << "aac" << "-b:a" << QString("%1k").arg(exportSettings.audioBitrateKbps);
     }
 
     args << "-pix_fmt" << "yuv420p" << "-movflags" << "+faststart" << "-progress" << "pipe:1" << QDir::toNativeSeparators(finalPath);
@@ -227,6 +249,7 @@ void TimelineWidget::copyTrimmedVideoMuted() {
     qint64 totalMs = 0;
     for (const auto& seg : segments) totalMs += (seg.endMs - seg.startMs);
     const double durationSec = qMax(0.1, totalMs / 1000.0);
+    const auto exportSettings = this->exportSettings;
 
     const double timeRatio = static_cast<double>(totalMs) / static_cast<double>(durationMs);
     const double spatialRatio = (cropRight - cropLeft) * (cropBottom - cropTop);
@@ -235,12 +258,18 @@ void TimelineWidget::copyTrimmedVideoMuted() {
     isExporting = true;
     const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
 
-    QString filter = buildFilterChain(vidW, vidH, filters);
+    QString filter;
     for (int i = 0; i < segments.size(); ++i) {
         double s = (segments[i].startMs / 1000.0) - seekStart;
         double d = (segments[i].endMs - segments[i].startMs) / 1000.0;
-        filter += QString("[filtered]trim=start=%1:duration=%2,setpts=PTS-STARTPTS[v%3];")
+        filter += QString("[0:v]trim=start=%1:duration=%2,setpts=PTS-STARTPTS[segment_v%3];")
                   .arg(qMax(0.0, s)).arg(d).arg(i);
+        filter += buildFilterChain(QString("[segment_v%1]").arg(i),
+                                   QString("[v%1]").arg(i),
+                                   QString("muted%1").arg(i),
+                                   vidW,
+                                   vidH,
+                                   filters);
     }
     for (int i = 0; i < segments.size(); ++i) filter += QString("[v%1]").arg(i);
 
@@ -264,8 +293,8 @@ void TimelineWidget::copyTrimmedVideoMuted() {
 
     args << "-pix_fmt" << "yuv420p";
 
-    if (estMb > 8.0) {
-        int videoBitrateKbps = qBound(200, static_cast<int>((7.5 * 8192) / durationSec), 15000);
+    if (estMb > exportSettings.videoCompressionThresholdMB) {
+        int videoBitrateKbps = qBound(200, static_cast<int>((exportSettings.targetCompressedSizeMB * 8192) / durationSec), 15000);
         args << "-r" << "25" << "-b:v" << QString("%1k").arg(videoBitrateKbps);
     } else {
         if (nv) args << "-rc" << "constqp" << "-qp" << "23";
@@ -314,16 +343,17 @@ void TimelineWidget::copyTrimmedGif() {
 
     const QString outputDir = getExportDir();
     QString finalPath = outputDir + "/" + generateClippedName("gif");
+    const auto exportSettings = this->exportSettings;
 
     const double duration = (segments[0].endMs - segments[0].startMs) / 1000.0;
     const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0));
 
-    QString filter = buildFilterChain(vidW, vidH, filters);
+    QString filter = buildFilterChain("[0:v]", "[filtered]", "gif", vidW, vidH, filters);
     const QString cropFilter = QString("crop=trunc(iw*(%1-%2)/2)*2:trunc(ih*(%3-%4)/2)*2:trunc(iw*%2/2)*2:trunc(ih*%4/2)*2")
                          .arg(cropRight).arg(cropLeft).arg(cropBottom).arg(cropTop);
 
-    filter += QString("[filtered]%1,fps=12,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse")
-                     .arg(cropFilter);
+    filter += QString("[filtered]%1,fps=%2,scale=%3:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse")
+                     .arg(cropFilter).arg(exportSettings.gifFps).arg(exportSettings.gifWidth);
 
     QStringList args;
     args << "-y" << "-ss" << QString::number(seekStart) << "-t" << QString::number(duration)
@@ -351,6 +381,7 @@ void TimelineWidget::copyTrimmedAudio() {
 
     const QString outputDir = getExportDir();
     QString finalPath = outputDir + "/" + generateClippedName("mp3");
+    const auto exportSettings = this->exportSettings;
 
     isExporting = true;
     double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
@@ -370,7 +401,7 @@ void TimelineWidget::copyTrimmedAudio() {
     args << "-y" << "-ss" << QString::number(seekStart) << "-i" << QDir::toNativeSeparators(currentFileUrl.toLocalFile())
          << "-filter_complex" << filter
          << "-map" << "[outa]"
-         << "-c:a" << "libmp3lame" << "-b:a" << "192k" << "-threads" << "0"
+         << "-c:a" << "libmp3lame" << "-b:a" << QString("%1k").arg(exportSettings.audioBitrateKbps) << "-threads" << "0"
          << QDir::toNativeSeparators(finalPath);
 
     auto *ffmpeg = new QProcess(this);
@@ -396,11 +427,16 @@ QString TimelineWidget::generateClippedName(const QString &extension) const {
         return QString("%1.%2").arg(customExportName, extension);
     }
 
+    const auto settings = exportSettings;
     const QFileInfo fileInfo(currentFileUrl.toLocalFile());
     QString origName = fileInfo.baseName();
     QString timeStr = QTime::currentTime().toString("hh-mm-ss-AP");
-
-    return QString("(clip-%1_clipped-%2).%3").arg(origName, timeStr, extension);
+    QString prefix = settings.fileNamePrefix.trimmed().isEmpty() ? QString("clip") : settings.fileNamePrefix.trimmed();
+    QStringList parts;
+    parts << prefix;
+    if (settings.includeSourceNameInExport && !origName.isEmpty()) parts << origName;
+    parts << QString("clipped-%1").arg(timeStr);
+    return QString("(%1).%2").arg(parts.join("-"), extension);
 }
 
 double TimelineWidget::getTotalSegmentsDuration() {

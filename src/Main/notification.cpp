@@ -5,8 +5,10 @@
 #include <QLabel>
 #include <QGuiApplication>
 #include <QScreen>
+#include <QSettings>
 
 #include "../Includes/timelinewidget.h"
+#include "../Includes/appsettings.h"
 
 void TimelineWidget::showProgressNotification(QProcess* process, qint64 totalMs) {
     process->setProcessChannelMode(QProcess::MergedChannels);
@@ -53,11 +55,22 @@ void TimelineWidget::showNotification(const QString &message) {
     if (!screen) screen = QGuiApplication::primaryScreen();
 
     QRect screenGeom = screen->availableGeometry();
+    QSettings settings = makeAppSettings();
+    const QString position = settings.value("general/notificationPosition", "top-right").toString();
     int x = screenGeom.right() - n->width() - 20;
     int y = screenGeom.top() + 20;
+    if (position == "top-left") {
+        x = screenGeom.left() + 20;
+    } else if (position == "bottom-right") {
+        y = screenGeom.bottom() - n->height() - 20;
+    } else if (position == "bottom-left") {
+        x = screenGeom.left() + 20;
+        y = screenGeom.bottom() - n->height() - 20;
+    }
 
     n->move(x, y);
     n->show();
 
-    QTimer::singleShot(2000, n, &QWidget::close);
+    const int durationMs = settings.value("general/notificationDurationMs", 2000).toInt();
+    QTimer::singleShot(qMax(250, durationMs), n, &QWidget::close);
 }

@@ -17,6 +17,7 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QStyle>
+#include <QString>
 
 class QProcess;
 
@@ -80,6 +81,32 @@ public slots:
         filterEnabled = enabled;
     }
 public:
+    struct AutoCutSettings {
+        double silenceThresholdDb = -45.0;
+        double minimumSilenceDurationSec = 0.3;
+        double paddingSec = 0.15;
+        double minimumClipDurationSec = 0.1;
+    };
+
+    struct PlaybackSettings {
+        int majorSeekMs = 2000;
+        int minorSeekMs = 16;
+        int splitGuardMs = 200;
+        int minSegmentDurationMs = 100;
+    };
+
+    struct ExportSettings {
+        QString exportDirectory;
+        int gifFps = 12;
+        int gifWidth = 480;
+        int audioBitrateKbps = 192;
+        int compressedAudioBitrateKbps = 128;
+        double videoCompressionThresholdMB = 8.0;
+        double targetCompressedSizeMB = 7.1;
+        QString fileNamePrefix = "clip";
+        bool includeSourceNameInExport = true;
+    };
+
     // 1. Move Segment inside the class to fix scoping errors
     struct Segment {
         qint64 startMs;
@@ -144,6 +171,12 @@ public:
     double getTotalSegmentsDuration();
     bool sourceHasVideo() const { return hasVideoStream; }
     bool sourceHasAudio() const { return hasAudioStream; }
+    AutoCutSettings getAutoCutSettings() const { return autoCutSettings; }
+    void setAutoCutSettings(const AutoCutSettings &settings) { autoCutSettings = settings; }
+    PlaybackSettings getPlaybackSettings() const { return playbackSettings; }
+    void setPlaybackSettings(const PlaybackSettings &settings) { playbackSettings = settings; }
+    ExportSettings getExportSettings() const { return exportSettings; }
+    void setExportSettings(const ExportSettings &settings) { exportSettings = settings; }
     QColor m_accentColor = QColor("#3D5AFE"); // Defaults in case QSS fails
     QColor m_secondaryColor = QColor("#FF3232");
     QColor m_backgroundColor = QColor("#080809");
@@ -249,6 +282,9 @@ private:
     QString generateClippedName(const QString &extension) const;
     bool hasVideoStream = true;
     bool hasAudioStream = true;
+    AutoCutSettings autoCutSettings;
+    PlaybackSettings playbackSettings;
+    ExportSettings exportSettings;
 };
 
 #endif // TIMELINEWIDGET_H

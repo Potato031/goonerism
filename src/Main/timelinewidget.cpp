@@ -29,14 +29,15 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent) {
 }
 
 void TimelineWidget::splitAtPlayhead() {
+    const int splitGuard = playbackSettings.splitGuardMs;
     for (int i = 0; i < segments.size(); ++i) {
-        if (currentPosMs > segments[i].startMs + 200 && currentPosMs < segments[i].endMs - 200) {
-            saveState();
+        if (currentPosMs > segments[i].startMs + splitGuard && currentPosMs < segments[i].endMs - splitGuard) {
             qint64 originalEnd = segments[i].endMs;
             segments[i].endMs = currentPosMs;
             segments.insert(i + 1, { currentPosMs, originalEnd });
             selectedSegmentIdx = i + 1;
             showNotification("CLIP SPLIT ✂️");
+            emit clipTrimmed();
             update();
             return;
         }
@@ -50,6 +51,7 @@ void TimelineWidget::deleteSelectedSegment() {
         selectedSegmentIdx = -1;
         showNotification("CLIP DELETED 🗑️");
         validatePlayheadPosition();
+        emit clipTrimmed();
         update();
     }
 }
@@ -221,7 +223,7 @@ void TimelineWidget::forceFitToDuration() {
             segments[0].endMs = durationMs;
         }
 
+        emit clipTrimmed();
         this->update();
     }
 }
-

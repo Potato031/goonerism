@@ -2,6 +2,7 @@
 
 void TimelineWidget::mousePressEvent(QMouseEvent* e) {
     if (durationMs <= 0 || segments.isEmpty()) return;
+    setFocus();
 
     const int drawX = e->position().x() - sidebarWidth + scrollOffset;
     const double pxPerMs = static_cast<double>(width() - sidebarWidth) * zoomFactor / durationMs;
@@ -141,12 +142,13 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
 
     if (activeEdge != None && activeSegmentIdx != -1) {
         const qint64 newTime = qBound(0LL, static_cast<qint64>(drawX / pxPerMs), durationMs);
+        const qint64 minSegmentDuration = playbackSettings.minSegmentDurationMs;
         if (activeEdge == Start) {
             const qint64 minStart = (activeSegmentIdx > 0) ? segments[activeSegmentIdx-1].endMs : 0;
-            segments[activeSegmentIdx].startMs = qBound(minStart, newTime, segments[activeSegmentIdx].endMs - 100);
+            segments[activeSegmentIdx].startMs = qBound(minStart, newTime, segments[activeSegmentIdx].endMs - minSegmentDuration);
         } else {
             const qint64 maxEnd = (activeSegmentIdx < segments.size() - 1) ? segments[activeSegmentIdx+1].startMs : durationMs;
-            segments[activeSegmentIdx].endMs = qBound(segments[activeSegmentIdx].startMs + 100, newTime, maxEnd);
+            segments[activeSegmentIdx].endMs = qBound(segments[activeSegmentIdx].startMs + minSegmentDuration, newTime, maxEnd);
         }
         update();
     }
@@ -160,7 +162,10 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
 }
 
 void TimelineWidget::mouseReleaseEvent(QMouseEvent* e) {
-    if (activeEdge != None) saveState();
+    if (activeEdge != None) {
+        saveState();
+        emit clipTrimmed();
+    }
 
     if (e->button() == Qt::RightButton) {
         isSelecting = false;
