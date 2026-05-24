@@ -26,6 +26,7 @@ void MainWindow::checkForUpdates() {
             QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
             QString latestTag = obj.value("tag_name").toString();
 
+            if (latestTag.startsWith('v')) latestTag = latestTag.mid(1);
             if (!latestTag.isEmpty() && latestTag != CURRENT_VERSION && !isUpdating) {
                 QJsonArray assets = obj.value("assets").toArray();
                 QString downloadUrl;
