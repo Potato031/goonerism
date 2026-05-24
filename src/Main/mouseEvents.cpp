@@ -1,4 +1,5 @@
 #include "../Includes/timelinewidget.h"
+#include <QMenu>
 
 void TimelineWidget::mousePressEvent(QMouseEvent* e) {
     if (durationMs <= 0 || segments.isEmpty()) return;
@@ -21,13 +22,14 @@ void TimelineWidget::mousePressEvent(QMouseEvent* e) {
     }
 
     if (e->button() == Qt::RightButton) {
-        isSelecting = true;
-        selectionRect.setTopLeft(e->pos());
-        selectionRect.setBottomRight(e->pos());
-
-        preSelectSnapshot = selectedSegmentIndices;
-        if (selectedSegmentIdx != -1) preSelectSnapshot.insert(selectedSegmentIdx);
-
+        if (clickedIdx != -1) {
+            selectedSegmentIndices.clear();
+            selectedSegmentIdx = clickedIdx;
+            currentPosMs = qBound(0LL, clickTime, durationMs);
+            emitVisualStateForCurrentContext();
+            emit playheadMoved(currentPosMs);
+            showClipContextMenu(e->globalPosition().toPoint(), clickTime, clickedIdx);
+        }
         update();
         return;
     }
@@ -60,12 +62,59 @@ void TimelineWidget::mousePressEvent(QMouseEvent* e) {
             selectedSegmentIndices.clear();
             selectedSegmentIdx = clickedIdx;
         }
+        emitVisualStateForCurrentContext();
     } else {
         selectedSegmentIdx = -1;
         selectedSegmentIndices.clear();
     }
 
     update();
+}
+
+void TimelineWidget::showClipContextMenu(const QPoint &globalPos, qint64 clickTime, int clickedIdx) {
+    QMenu menu(this);
+    menu.setObjectName("TimelineContextMenu");
+
+    QAction *splitAction = menu.addAction("Split clip here");
+    menu.addSeparator();
+    QAction *blurAction = menu.addAction("Add blur box to this clip");
+    QAction *pixelAction = menu.addAction("Add pixelate box to this clip");
+    QAction *blackoutAction = menu.addAction("Add blackout box to this clip");
+    menu.addSeparator();
+    QAction *applyClipAction = menu.addAction("Apply current crop + filters to clip");
+    QAction *applyAllAction = menu.addAction("Apply current crop + filters to all clips");
+    QAction *clearClipAction = menu.addAction("Clear clip crop + filters");
+    QAction *clearAllAction = menu.addAction("Clear all clip crop + filters");
+
+    QAction *chosen = menu.exec(globalPos);
+    if (!chosen) return;
+
+    if (chosen == splitAction) {
+        currentPosMs = qBound(0LL, clickTime, durationMs);
+        saveState();
+        splitAtPlayhead();
+        return;
+    }
+
+    if (chosen == blurAction || chosen == pixelAction || chosen == blackoutAction) {
+        if (clickedIdx >= 0 && clickedIdx < segments.size()) {
+            selectedSegmentIdx = clickedIdx;
+            selectedSegmentIndices.clear();
+            emitVisualStateForCurrentContext();
+            emit requestAddFilter(chosen == blurAction ? 0 : chosen == pixelAction ? 1 : 2);
+        }
+        return;
+    }
+
+    if (chosen == applyClipAction) {
+        applyCurrentVisualsToSelection(false);
+    } else if (chosen == applyAllAction) {
+        applyCurrentVisualsToSelection(true);
+    } else if (chosen == clearClipAction) {
+        clearVisualsForSelection(false);
+    } else if (chosen == clearAllAction) {
+        clearVisualsForSelection(true);
+    }
 }
 
 void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
@@ -107,6 +156,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
             const double relativeX = e->pos().x() - sidebarWidth + scrollOffset;
 
             currentPosMs = qBound(0LL, static_cast<qint64>((relativeX / static_cast<double>(contentWidth)) * durationMs), durationMs);
+            emitVisualStateForCurrentContext();
             emit playheadMoved(currentPosMs);
             update();
             return;
@@ -155,6 +205,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
     else if (isScrubbing && (e->buttons() & Qt::LeftButton)) {
         currentPosMs = qBound(0LL, static_cast<qint64>(drawX / pxPerMs), durationMs);
         validatePlayheadPosition();
+        emitVisualStateForCurrentContext();
         updateEditorVolume();
         emit playheadMoved(currentPosMs);
         update();

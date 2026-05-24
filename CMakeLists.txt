@@ -11,6 +11,7 @@ find_package(Qt6 REQUIRED COMPONENTS
         Widgets
         Multimedia
         MultimediaWidgets
+        Concurrent
 )
 
 add_executable(PotatoEditor
@@ -45,4 +46,5 @@ target_link_libraries(PotatoEditor
         Qt6::Widgets
         Qt6::Multimedia
         Qt6::MultimediaWidgets
+        Qt6::Concurrent
 )

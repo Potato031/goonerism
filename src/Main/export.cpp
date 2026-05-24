@@ -86,6 +86,12 @@ static QString buildFilterChain(const QString &inputLabel,
     chain += QString("%1copy%2;").arg(lastOutput, outputLabel);
     return chain;
 }
+
+static QString cropScaleFilter(float cropRight, float cropLeft, float cropBottom, float cropTop, int vidW, int vidH) {
+    return QString("crop=trunc(iw*(%1-%2)/2)*2:trunc(ih*(%3-%4)/2)*2:trunc(iw*%2/2)*2:trunc(ih*%4/2)*2,scale=%5:%6,setsar=1")
+        .arg(cropRight).arg(cropLeft).arg(cropBottom).arg(cropTop).arg(vidW).arg(vidH);
+}
+
 void TimelineWidget::copyTrimmedVideo() {
     if (segments.empty() || isExporting) return;
     if (!hasVideoStream) {
@@ -100,13 +106,10 @@ void TimelineWidget::copyTrimmedVideo() {
     // 1. Resolve dimensions and filters
     int vidW = 1920;
     int vidH = 1080;
-    QList<VideoWithCropWidget::FilterObject> filters;
-
     const QWidget* topWindow = this->window();
     if (const QObject* videoContainer = topWindow->findChild<QObject*>("VideoContainer")) {
         auto* vwc = videoContainer->findChild<VideoWithCropWidget*>();
         if (vwc) {
-            filters = vwc->filterObjects;
             const QVariant vW = vwc->property("actualWidth");
             const QVariant vH = vwc->property("actualHeight");
             if (vW.isValid() && vW.toInt() > 0) vidW = vW.toInt();
@@ -138,18 +141,21 @@ void TimelineWidget::copyTrimmedVideo() {
                                    QString("seg%1").arg(i),
                                    vidW,
                                    vidH,
-                                   filters);
+                                   segments[i].filters);
+        filter += QString("[v%1]%2[vx%3];")
+                  .arg(i)
+                  .arg(cropScaleFilter(segments[i].cropRight, segments[i].cropLeft,
+                                       segments[i].cropBottom, segments[i].cropTop,
+                                       vidW, vidH))
+                  .arg(i);
 
         filter += QString("[0:a:%1]atrim=start=%2:duration=%3,asetpts=PTS-STARTPTS,volume=%4,aresample=async=1[a%5];")
                   .arg(currentAudioTrack).arg(qMax(0.0, s)).arg(d).arg(segments[i].gain).arg(i);
     }
 
-    for (int i = 0; i < segments.size(); ++i) filter += QString("[v%1][a%1]").arg(i);
+    for (int i = 0; i < segments.size(); ++i) filter += QString("[vx%1][a%1]").arg(i);
 
-    QString cropStr = QString("crop=trunc(iw*(%1-%2)/2)*2:trunc(ih*(%3-%4)/2)*2:trunc(iw*%2/2)*2:trunc(ih*%4/2)*2,setsar=1")
-                      .arg(cropRight).arg(cropLeft).arg(cropBottom).arg(cropTop);
-
-    filter += QString("concat=n=%1:v=1:a=1[cv][outa];[cv]%2[outv]").arg(segments.size()).arg(cropStr);
+    filter += QString("concat=n=%1:v=1:a=1[outv][outa]").arg(segments.size());
 
 
     double originalBitrateKbps = (originalFileSize * 8.0) / (durationMs / 1000.0) / 1000.0;
@@ -232,14 +238,14 @@ void TimelineWidget::copyTrimmedVideoMuted() {
     }
 
     int vidW = 1920, vidH = 1080;
-    QList<VideoWithCropWidget::FilterObject> filters;
     const QWidget* topWindow = this->window();
     if (const QObject* videoContainer = topWindow->findChild<QObject*>("VideoContainer")) {
         auto* vwc = videoContainer->findChild<VideoWithCropWidget*>();
         if (vwc) {
-            filters = vwc->filterObjects;
-            vidW = vwc->property("actualWidth").toInt();
-            vidH = vwc->property("actualHeight").toInt();
+            const QVariant vW = vwc->property("actualWidth");
+            const QVariant vH = vwc->property("actualHeight");
+            if (vW.isValid() && vW.toInt() > 0) vidW = vW.toInt();
+            if (vH.isValid() && vH.toInt() > 0) vidH = vH.toInt();
         }
     }
 
@@ -252,7 +258,12 @@ void TimelineWidget::copyTrimmedVideoMuted() {
     const auto exportSettings = this->exportSettings;
 
     const double timeRatio = static_cast<double>(totalMs) / static_cast<double>(durationMs);
-    const double spatialRatio = (cropRight - cropLeft) * (cropBottom - cropTop);
+    double weightedSpatialRatio = 0.0;
+    for (const auto &seg : segments) {
+        const double segDuration = qMax<qint64>(1, seg.endMs - seg.startMs);
+        weightedSpatialRatio += segDuration * ((seg.cropRight - seg.cropLeft) * (seg.cropBottom - seg.cropTop));
+    }
+    const double spatialRatio = totalMs > 0 ? weightedSpatialRatio / totalMs : 1.0;
     const double estMb = (originalFileSize * timeRatio * spatialRatio) / (1024.0 * 1024.0);
 
     isExporting = true;
@@ -269,14 +280,17 @@ void TimelineWidget::copyTrimmedVideoMuted() {
                                    QString("muted%1").arg(i),
                                    vidW,
                                    vidH,
-                                   filters);
+                                   segments[i].filters);
+        filter += QString("[v%1]%2[vx%3];")
+                  .arg(i)
+                  .arg(cropScaleFilter(segments[i].cropRight, segments[i].cropLeft,
+                                       segments[i].cropBottom, segments[i].cropTop,
+                                       vidW, vidH))
+                  .arg(i);
     }
-    for (int i = 0; i < segments.size(); ++i) filter += QString("[v%1]").arg(i);
+    for (int i = 0; i < segments.size(); ++i) filter += QString("[vx%1]").arg(i);
 
-    const QString cropStr = QString("crop=trunc(iw*(%1-%2)/2)*2:trunc(ih*(%3-%4)/2)*2:trunc(iw*%2/2)*2:trunc(ih*%4/2)*2,setsar=1")
-                      .arg(cropRight).arg(cropLeft).arg(cropBottom).arg(cropTop);
-
-    filter += QString("concat=n=%1:v=1:a=0[cv];[cv]%2[outv]").arg(segments.size()).arg(cropStr);
+    filter += QString("concat=n=%1:v=1:a=0[outv]").arg(segments.size());
 
     QStringList args;
     args << "-y" << "-ss" << QString::number(seekStart) << "-i" << QDir::toNativeSeparators(currentFileUrl.toLocalFile())
@@ -330,14 +344,14 @@ void TimelineWidget::copyTrimmedGif() {
     }
 
     int vidW = 1920, vidH = 1080;
-    QList<VideoWithCropWidget::FilterObject> filters;
     const QWidget* topWindow = this->window();
     if (const QObject* videoContainer = topWindow->findChild<QObject*>("VideoContainer")) {
         auto* vwc = videoContainer->findChild<VideoWithCropWidget*>();
         if (vwc) {
-            filters = vwc->filterObjects;
-            vidW = vwc->property("actualWidth").toInt();
-            vidH = vwc->property("actualHeight").toInt();
+            const QVariant vW = vwc->property("actualWidth");
+            const QVariant vH = vwc->property("actualHeight");
+            if (vW.isValid() && vW.toInt() > 0) vidW = vW.toInt();
+            if (vH.isValid() && vH.toInt() > 0) vidH = vH.toInt();
         }
     }
 
@@ -348,9 +362,9 @@ void TimelineWidget::copyTrimmedGif() {
     const double duration = (segments[0].endMs - segments[0].startMs) / 1000.0;
     const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0));
 
-    QString filter = buildFilterChain("[0:v]", "[filtered]", "gif", vidW, vidH, filters);
-    const QString cropFilter = QString("crop=trunc(iw*(%1-%2)/2)*2:trunc(ih*(%3-%4)/2)*2:trunc(iw*%2/2)*2:trunc(ih*%4/2)*2")
-                         .arg(cropRight).arg(cropLeft).arg(cropBottom).arg(cropTop);
+    const auto &seg = segments.first();
+    QString filter = buildFilterChain("[0:v]", "[filtered]", "gif", vidW, vidH, seg.filters);
+    const QString cropFilter = cropScaleFilter(seg.cropRight, seg.cropLeft, seg.cropBottom, seg.cropTop, vidW, vidH);
 
     filter += QString("[filtered]%1,fps=%2,scale=%3:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse")
                      .arg(cropFilter).arg(exportSettings.gifFps).arg(exportSettings.gifWidth);

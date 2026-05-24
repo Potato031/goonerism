@@ -8,8 +8,12 @@
 #include "../Includes/appsettings.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QSplitter>
 #include <QFileDialog>
 #include <QDir>
+#include <QListWidget>
+#include <QFormLayout>
+#include <QCheckBox>
 #include <QStyle>
 #include <QFileInfo>
 #include <QShortcut>
@@ -17,6 +21,7 @@
 #include <QApplication>
 #include <QGraphicsBlurEffect>
 #include <QStandardPaths>
+#include <QDirIterator>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -76,307 +81,216 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 }
 
 void MainWindow::setupUi() {
-    auto applyDepth = [](QWidget *widget, const QColor &color, int blur, int yOffset) {
-        if (!widget) return;
-        auto *shadow = new QGraphicsDropShadowEffect(widget);
-        shadow->setBlurRadius(blur);
-        shadow->setOffset(0, yOffset);
-        shadow->setColor(color);
-        widget->setGraphicsEffect(shadow);
-    };
-
     auto* centralWidget = new QWidget(this);
-    centralWidget->setAcceptDrops(true);
     centralWidget->setObjectName("centralWidget");
+    centralWidget->setAcceptDrops(true);
     setCentralWidget(centralWidget);
     setObjectName("MainCanvas");
-    setWindowTitle("Potato Editor");
+    setWindowTitle("Potato Editor Studio");
 
     mainLayout = new QVBoxLayout(centralWidget);
-    mainLayout->setContentsMargins(14, 12, 14, 12);
-    mainLayout->setSpacing(10);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
 
-    toolbar = new QFrame();
-    toolbar->setObjectName("toolbar");
-    toolbar->setMinimumHeight(74);
-    auto* toolbarLayout = new QHBoxLayout(toolbar);
-    toolbarLayout->setContentsMargins(14, 10, 14, 10);
-    toolbarLayout->setSpacing(10);
+    setupToolbar();
 
-    auto* logoContainer = new QWidget();
-    auto* logoLayout = new QHBoxLayout(logoContainer);
-    logoLayout->setContentsMargins(0, 0, 0, 0);
-    logoLayout->setSpacing(3);
-    logoBoldLabel = new QLabel("POTATOES");
-    logoBoldLabel->setObjectName("LogoBold");
-    logoLightLabel = new QLabel("QUICK ONE");
-    logoLightLabel->setObjectName("LogoLight");
-    logoLayout->addWidget(logoBoldLabel, 0, Qt::AlignVCenter);
-    logoLayout->addWidget(logoLightLabel, 0, Qt::AlignVCenter);
-    logoLayout->addStretch();
+    mainSplitter = new QSplitter(Qt::Vertical, centralWidget);
+    mainSplitter->setHandleWidth(1);
 
-    auto* titleStack = new QWidget();
-    auto* titleStackLayout = new QVBoxLayout(titleStack);
-    titleStackLayout->setContentsMargins(0, 0, 0, 0);
-    titleStackLayout->setSpacing(2);
-    titleStackLayout->addWidget(logoContainer);
+    topPaneSplitter = new QSplitter(Qt::Horizontal, mainSplitter);
+    topPaneSplitter->setHandleWidth(1);
 
-    currentMediaLabel = new QLabel("NO MEDIA LOADED");
-    currentMediaLabel->setObjectName("CurrentMediaPill");
-    titleStackLayout->addWidget(currentMediaLabel, 0, Qt::AlignLeft);
+    setupSidebar();
+    setupWorkspace();
 
-    auto* inputLabel = new QLabel("EXPORT NAME");
-    inputLabel->setObjectName("InputLabel");
-    exportInput = new QLineEdit();
-    exportInput->setObjectName("ExportNameInput");
-    exportInput->setPlaceholderText("leave blank to auto-name exports");
-    exportInput->setMinimumWidth(220);
-
-    auto* exportField = new QWidget();
-    auto* exportFieldLayout = new QVBoxLayout(exportField);
-    exportFieldLayout->setContentsMargins(0, 0, 0, 0);
-    exportFieldLayout->setSpacing(6);
-    exportFieldLayout->addWidget(inputLabel);
-    exportFieldLayout->addWidget(exportInput);
-
-    importBtn = new QPushButton("IMPORT MEDIA");
-    importBtn->setObjectName("PrimaryGhostBtn");
-    importBtn->setCursor(Qt::PointingHandCursor);
-    importBtn->setMinimumHeight(36);
-
-    toolbarLayout->addWidget(titleStack, 1);
-    toolbarLayout->addWidget(exportField);
-    toolbarLayout->addWidget(importBtn);
-    applyDepth(toolbar, QColor(2, 5, 10, 70), 18, 4);
-    mainLayout->addWidget(toolbar);
-
-    workspace = new QFrame();
-    workspace->setObjectName("workspace");
-    auto* workspaceLayout = new QVBoxLayout(workspace);
-    workspaceLayout->setContentsMargins(12, 12, 12, 12);
-    workspaceLayout->setSpacing(10);
-
-    workspaceContentLayout = new QHBoxLayout();
-    workspaceContentLayout->setSpacing(10);
-    stageColumnLayout = nullptr;
-    previewHeader = nullptr;
-    videoContainer = nullptr;
-    videoFullscreenPlaceholder = nullptr;
-    videoFullscreenDialog = nullptr;
-
-    clipSidebar = new QFrame();
-    clipSidebar->setFixedWidth(250);
-    clipSidebar->setObjectName("clipSidebar");
-
-    auto* sidebarLayout = new QVBoxLayout(clipSidebar);
-    sidebarLayout->setContentsMargins(10, 10, 10, 10);
-    sidebarLayout->setSpacing(8);
-
-    auto* sideHeader = new QHBoxLayout();
-    auto* sideTitle = new QLabel("MEDIA BIN");
-    sideTitle->setObjectName("SectionLabel");
-    sidebarCountLabel = new QLabel("0 ITEMS");
-    sidebarCountLabel->setObjectName("MiniBadge");
-    sideHeader->addWidget(sideTitle);
-    sideHeader->addStretch();
-    sideHeader->addWidget(sidebarCountLabel);
-
-    sidebarEmptyLabel = new QLabel("Recent media from your Movies and Music folders will appear here.");
-    sidebarEmptyLabel->setObjectName("EmptyStateLabel");
-    sidebarEmptyLabel->setWordWrap(true);
-
-    sidebarScroll = new QScrollArea();
-    sidebarScroll->setWidgetResizable(true);
-    sidebarScroll->setFrameShape(QFrame::NoFrame);
-    sidebarScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    sidebarScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-
-    sidebarContent = new QWidget();
-    sidebarListLayout = new QVBoxLayout(sidebarContent);
-    sidebarListLayout->setContentsMargins(0, 0, 0, 0);
-    sidebarListLayout->setSpacing(6);
-
-    sidebarScroll->setWidget(sidebarContent);
-    sidebarLayout->addLayout(sideHeader);
-    sidebarLayout->addWidget(sidebarEmptyLabel);
-    sidebarLayout->addWidget(sidebarScroll, 1);
-
-    stageColumnLayout = new QVBoxLayout();
-    stageColumnLayout->setSpacing(10);
-
-    previewHeader = new QFrame();
-    previewHeader->setObjectName("PanelHeader");
-    auto* previewHeaderLayout = new QHBoxLayout(previewHeader);
-    previewHeaderLayout->setContentsMargins(8, 4, 8, 4);
-    previewHeaderLayout->setSpacing(6);
-
-    transportHintLabel = new QLabel("");
-    transportHintLabel->setObjectName("SubtleHint");
-    previewHeaderLayout->addStretch();
-    previewHeaderLayout->addWidget(transportHintLabel, 0, Qt::AlignRight);
-
-    videoContainer = new QFrame();
-    videoContainer->setObjectName("VideoContainer");
-    videoContainer->setMinimumHeight(120);
-    auto* videoLayout = new QGridLayout(videoContainer);
-    videoLayout->setContentsMargins(4, 4, 4, 4);
-
-    videoWithCrop = new VideoWithCropWidget(videoContainer);
-    videoWithCrop->setObjectName("VideoSurface");
-    videoWithCrop->setPlaceholderState("Import media to start editing",
-                                       "Video appears here. Audio-only files can still be trimmed, auto-cut, and exported.");
-    videoLayout->addWidget(videoWithCrop, 0, 0);
-
-    fullscreenBtn = new QPushButton("⛶");
-    fullscreenBtn->setFixedSize(34, 34);
-    fullscreenBtn->setCursor(Qt::PointingHandCursor);
-    fullscreenBtn->setObjectName("FullscreenBtn");
-    videoLayout->addWidget(fullscreenBtn, 0, 0, Qt::AlignBottom | Qt::AlignRight);
-
-    stageColumnLayout->addWidget(previewHeader);
-    stageColumnLayout->addWidget(videoContainer, 1);
-    applyDepth(clipSidebar, QColor(2, 5, 10, 55), 14, 3);
-    applyDepth(previewHeader, QColor(2, 5, 10, 40), 10, 2);
-    applyDepth(videoContainer, QColor(2, 5, 10, 65), 14, 4);
-
-    workspaceContentLayout->addWidget(clipSidebar);
-    workspaceContentLayout->addLayout(stageColumnLayout, 1);
-    workspaceLayout->addLayout(workspaceContentLayout, 1);
-
-    timelineTools = new QWidget();
+    // Tool Rack (Effects)
+    timelineTools = new QFrame();
     timelineTools->setObjectName("timelineTools");
-    timelineToolsLayout = new QHBoxLayout(timelineTools);
-    timelineToolsLayout->setContentsMargins(10, 8, 10, 8);
-    timelineToolsLayout->setSpacing(6);
+    timelineTools->setFixedWidth(200);
+    timelineToolsLayout = new QVBoxLayout(timelineTools);
+    timelineToolsLayout->setContentsMargins(12, 12, 12, 12);
+    timelineToolsLayout->setSpacing(8);
 
-    toolHeaderLabel = new QLabel("");
-    toolHeaderLabel->setObjectName("SectionLabel");
+    toolHeaderLabel = new QLabel("EFFECTS");
+    toolHeaderLabel->setObjectName("SectionHeader");
     timelineToolsLayout->addWidget(toolHeaderLabel);
 
-    autoCutBtn = new QPushButton("AUTO-CUT SILENCE");
-    autoCutBtn->setProperty("class", "ToolBtn");
-    autoCutBtn->setMinimumHeight(30);
-
-    settingsBtn = new QPushButton("SETTINGS");
-    settingsBtn->setProperty("class", "ToolBtn");
-    settingsBtn->setMinimumHeight(30);
-
+    blurBtn = new QPushButton("BLUR");
+    pixelBtn = new QPushButton("PIXELATE");
+    solidBtn = new QPushButton("BLACKOUT");
+    autoCutBtn = new QPushButton("AUTO-CUT");
     resetCropBtn = new QPushButton("RESET CROP");
-    resetCropBtn->setProperty("class", "ToolBtn");
-    resetCropBtn->setMinimumHeight(30);
-
-    blurBtn = new QPushButton("SPAWN BLUR");
-    blurBtn->setProperty("class", "ToolBtn");
-    blurBtn->setMinimumHeight(30);
-
-    pixelBtn = new QPushButton("SPAWN PIXEL");
-    pixelBtn->setProperty("class", "ToolBtn");
-    pixelBtn->setMinimumHeight(30);
-
-    solidBtn = new QPushButton("SPAWN BLACKOUT");
-    solidBtn->setProperty("class", "ToolBtn");
-    solidBtn->setMinimumHeight(30);
+    for (QPushButton *button : {blurBtn, pixelBtn, solidBtn, autoCutBtn, resetCropBtn}) {
+        button->setProperty("class", "ToolBtn");
+    }
 
     timelineToolsLayout->addWidget(blurBtn);
     timelineToolsLayout->addWidget(pixelBtn);
     timelineToolsLayout->addWidget(solidBtn);
     timelineToolsLayout->addSpacing(8);
     timelineToolsLayout->addWidget(autoCutBtn);
-    timelineToolsLayout->addWidget(settingsBtn);
-    timelineToolsLayout->addWidget(resetCropBtn);
     timelineToolsLayout->addStretch();
-    applyDepth(timelineTools, QColor(2, 5, 10, 40), 10, 2);
+    timelineToolsLayout->addWidget(resetCropBtn);
 
-    timeline = new TimelineWidget(this);
-    timeline->setMinimumHeight(170);
-    timeline->cropTop = 0.03f;
-    timeline->cropBottom = 0.96f;
+    topPaneSplitter->addWidget(clipSidebar);
+    topPaneSplitter->addWidget(workspace);
+    topPaneSplitter->addWidget(timelineTools);
+    topPaneSplitter->setStretchFactor(1, 1);
 
-    auto* timelineShell = new QFrame();
-    timelineShell->setObjectName("TimelineShell");
-    auto* timelineShellLayout = new QVBoxLayout(timelineShell);
-    timelineShellLayout->setContentsMargins(0, 0, 0, 0);
-    timelineShellLayout->setSpacing(8);
+    mainSplitter->addWidget(topPaneSplitter);
+    setupTimeline();
+    mainSplitter->addWidget(timelineShell);
+    mainSplitter->setStretchFactor(0, 1);
+    mainSplitter->setSizes({600, 240});
 
-    timelineShellLayout->addWidget(timelineTools);
-    timelineShellLayout->addWidget(timeline);
+    mainLayout->addWidget(mainSplitter);
 
-    workspaceLayout->addWidget(timelineShell);
-    applyDepth(workspace, QColor(2, 5, 10, 45), 12, 2);
-    applyDepth(timelineShell, QColor(2, 5, 10, 45), 10, 2);
-    mainLayout->addWidget(workspace);
-
-    footer = new QFrame();
-    footer->setObjectName("footer");
-    auto* footerLayout = new QHBoxLayout(footer);
-    footerLayout->setContentsMargins(14, 10, 14, 10);
-    footerLayout->setSpacing(10);
-
-    auto* versionLabel = new QLabel(CURRENT_VERSION);
-    versionLabel->setObjectName("VersionLabel");
-
-    auto* playbackCluster = new QWidget();
-    auto* playbackClusterLayout = new QHBoxLayout(playbackCluster);
-    playbackClusterLayout->setContentsMargins(0, 0, 0, 0);
-    playbackClusterLayout->setSpacing(8);
-
-    volSlider = new QSlider(Qt::Horizontal);
-    volSlider->setRange(0, 100);
-    volSlider->setValue(80);
-    volSlider->setFixedWidth(120);
-
-    playPauseBtn = new QPushButton("PLAY");
-    playPauseBtn->setObjectName("ActionBtn");
-    playPauseBtn->setFixedSize(144, 42);
-
-    statusLabel = new QLabel("READY FOR MEDIA");
-    statusLabel->setObjectName("MetaData");
-
-    auto* volumeLabel = new QLabel("VOLUME");
-    volumeLabel->setObjectName("InputLabel");
-
-    playbackClusterLayout->addWidget(volumeLabel);
-    playbackClusterLayout->addWidget(volSlider);
-
-    auto* footerTitle = new QLabel("PLAYBACK");
-    footerTitle->setObjectName("SectionLabel");
-    auto* footerLeft = new QWidget();
-    auto* footerLeftLayout = new QHBoxLayout(footerLeft);
-    footerLeftLayout->setContentsMargins(0, 0, 0, 0);
-    footerLeftLayout->setSpacing(8);
-    footerLeftLayout->addWidget(footerTitle);
-    footerLeftLayout->addWidget(playbackCluster);
-    footerLeftLayout->addStretch();
-
-    auto* footerCenter = new QWidget();
-    auto* footerCenterLayout = new QHBoxLayout(footerCenter);
-    footerCenterLayout->setContentsMargins(0, 0, 0, 0);
-    footerCenterLayout->addStretch();
-    footerCenterLayout->addWidget(playPauseBtn);
-    footerCenterLayout->addStretch();
-
-    auto* footerRight = new QWidget();
-    auto* footerRightLayout = new QHBoxLayout(footerRight);
-    footerRightLayout->setContentsMargins(0, 0, 0, 0);
-    footerRightLayout->setSpacing(8);
-    footerRightLayout->addStretch();
-    footerRightLayout->addWidget(versionLabel);
-    footerRightLayout->addWidget(statusLabel);
-
-    footerLayout->addWidget(footerLeft, 1);
-    footerLayout->addWidget(footerCenter, 1);
-    footerLayout->addWidget(footerRight, 1);
-    applyDepth(footer, QColor(2, 5, 10, 55), 12, 3);
-    mainLayout->addWidget(footer);
+    footer = new QFrame(); footer->hide(); mainLayout->addWidget(footer);
+    volSlider = new QSlider(Qt::Horizontal); volSlider->hide();
+    currentMediaLabel = new QLabel(); currentMediaLabel->hide();
+    transportHintLabel = new QLabel(); transportHintLabel->hide();
 
     player = new QMediaPlayer(this);
     audio = new QAudioOutput(this);
     player->setAudioOutput(audio);
     player->setVideoSink(videoWithCrop->sink);
     audio->setVolume(0.8);
-
+    
     playPauseShortcut = nullptr;
     connect(importBtn, &QPushButton::clicked, this, &MainWindow::importMedia);
+}
+
+void MainWindow::setupToolbar() {
+    toolbar = new QFrame();
+    toolbar->setObjectName("toolbar");
+    auto* toolbarLayout = new QHBoxLayout(toolbar);
+    toolbarLayout->setContentsMargins(12, 0, 12, 0);
+    toolbarLayout->setSpacing(16);
+
+    auto* logoLayout = new QHBoxLayout();
+    logoLayout->setSpacing(4);
+    logoBoldLabel = new QLabel("POTATO");
+    logoBoldLabel->setObjectName("LogoBold");
+    logoLightLabel = new QLabel("STUDIO");
+    logoLightLabel->setObjectName("LogoLight");
+    logoLayout->addWidget(logoBoldLabel);
+    logoLayout->addWidget(logoLightLabel);
+    toolbarLayout->addLayout(logoLayout);
+    toolbarLayout->addStretch();
+
+    exportInput = new QLineEdit();
+    exportInput->setObjectName("ExportNameInput");
+    exportInput->setPlaceholderText("CLIP NAME...");
+    exportInput->setFixedWidth(240);
+    toolbarLayout->addWidget(exportInput);
+
+    importBtn = new QPushButton("IMPORT");
+    importBtn->setObjectName("PrimaryGhostBtn");
+    importBtn->setFixedWidth(100);
+    toolbarLayout->addWidget(importBtn);
+
+    settingsBtn = new QPushButton("⚙");
+    settingsBtn->setObjectName("PrimaryGhostBtn");
+    settingsBtn->setFixedWidth(44);
+    settingsBtn->setStyleSheet("font-size: 16px;");
+    toolbarLayout->addWidget(settingsBtn);
+
+    mainLayout->addWidget(toolbar);
+}
+
+void MainWindow::setupSidebar() {
+    clipSidebar = new QFrame();
+    clipSidebar->setObjectName("clipSidebar");
+    auto* sidebarLayout = new QVBoxLayout(clipSidebar);
+    sidebarLayout->setContentsMargins(12, 12, 12, 12);
+    sidebarLayout->setSpacing(8);
+    
+    previewHeader = new QFrame(); 
+    auto* previewHeaderLayout = new QHBoxLayout(previewHeader);
+    previewHeaderLayout->setContentsMargins(0, 0, 0, 0);
+    auto* mediaHeader = new QLabel("MEDIA BIN");
+    mediaHeader->setObjectName("SectionHeader");
+    previewHeaderLayout->addWidget(mediaHeader);
+    sidebarLayout->addWidget(previewHeader);
+
+    sidebarScroll = new QScrollArea();
+    sidebarScroll->setWidgetResizable(true);
+    sidebarScroll->setFrameShape(QFrame::NoFrame);
+    sidebarContent = new QWidget();
+    sidebarListLayout = new QVBoxLayout(sidebarContent);
+    sidebarListLayout->setContentsMargins(0, 0, 0, 0);
+    sidebarListLayout->setSpacing(2);
+    sidebarListLayout->setAlignment(Qt::AlignTop);
+    sidebarScroll->setWidget(sidebarContent);
+    sidebarLayout->addWidget(sidebarScroll);
+
+    sidebarCountLabel = new QLabel("0 ITEMS");
+    sidebarCountLabel->setObjectName("SidebarCountLabel");
+    sidebarLayout->addWidget(sidebarCountLabel);
+    
+    sidebarEmptyLabel = new QLabel(); sidebarEmptyLabel->hide();
+}
+
+void MainWindow::setupWorkspace() {
+    workspace = new QFrame();
+    workspace->setObjectName("workspace");
+    stageColumnLayout = new QVBoxLayout(workspace);
+    stageColumnLayout->setContentsMargins(24, 24, 24, 24);
+    stageColumnLayout->setSpacing(12);
+
+    workspaceContentLayout = new QHBoxLayout();
+
+    videoContainer = new QFrame();
+    videoContainer->setObjectName("VideoContainer");
+    videoContainer->setStyleSheet("background-color: #000; border: 1px solid #30363D; border-radius: 4px;");
+    auto* videoInternalLayout = new QVBoxLayout(videoContainer);
+    videoInternalLayout->setContentsMargins(0, 0, 0, 0);
+
+    videoWithCrop = new VideoWithCropWidget(videoContainer);
+    videoInternalLayout->addWidget(videoWithCrop);
+    stageColumnLayout->addWidget(videoContainer, 1);
+
+    auto* transportLayout = new QHBoxLayout();
+    transportLayout->setSpacing(16);
+    transportLayout->addStretch();
+    
+    playPauseBtn = new QPushButton();
+    playPauseBtn->setObjectName("ActionBtn");
+    playPauseBtn->setFixedSize(40, 40);
+    playPauseBtn->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+    playPauseBtn->setIconSize(QSize(18, 18));
+    transportLayout->addWidget(playPauseBtn, 0, Qt::AlignVCenter);
+
+    fullscreenBtn = new QPushButton("⛶");
+    fullscreenBtn->setObjectName("FullscreenBtn");
+    fullscreenBtn->setFixedSize(40, 40);
+    transportLayout->addWidget(fullscreenBtn, 0, Qt::AlignVCenter);
+    
+    transportLayout->addStretch();
+    stageColumnLayout->addLayout(transportLayout);
+}
+
+void MainWindow::setupTimeline() {
+    timelineShell = new QFrame();
+    timelineShell->setObjectName("TimelineShell");
+    auto* timelineShellLayout = new QVBoxLayout(timelineShell);
+    timelineShellLayout->setContentsMargins(12, 12, 12, 12);
+    timelineShellLayout->setSpacing(8);
+
+    auto* timelineHeader = new QHBoxLayout();
+    timelineHeader->setSpacing(8);
+    auto* timelineLabel = new QLabel("TIMELINE");
+    timelineLabel->setObjectName("SectionHeader");
+    timelineHeader->addWidget(timelineLabel);
+    timelineHeader->addStretch();
+    
+    statusLabel = new QLabel("READY");
+    statusLabel->setObjectName("StatusLabel");
+    timelineHeader->addWidget(statusLabel);
+    timelineShellLayout->addLayout(timelineHeader);
+
+    timeline = new TimelineWidget(timelineShell);
+    timelineShellLayout->addWidget(timeline);
 }
 
 void MainWindow::setupConnections() {
@@ -396,21 +310,31 @@ void MainWindow::setupConnections() {
     });
 
     connect(player, &QMediaPlayer::positionChanged, [this](qint64 pos) {
-        timeline->currentPosMs = pos;
+        timeline->setCurrentPosition(pos);
         updateVolume();
         if (player->playbackState() == QMediaPlayer::PlayingState) {
             timeline->validatePlayheadPosition();
             if (timeline->currentPosMs != pos) player->setPosition(timeline->currentPosMs);
             if (timeline->currentPosMs >= timeline->getEndLimit()) player->setPosition(timeline->getStartLimit());
+            
+            // PERFORMANCE: Only update timeline if the position actually changed significantly
+            // or use a timer to throttle. For now, we update it but ensure the paintEvent is lean.
+            timeline->update();
+        } else {
+            timeline->update();
         }
-        timeline->update();
     });
 
-    connect(blurBtn, &QPushButton::clicked, [this]() { videoWithCrop->addFilter(0); });
-    connect(pixelBtn, &QPushButton::clicked, [this]() { videoWithCrop->addFilter(1); });
-    connect(solidBtn, &QPushButton::clicked, [this]() { videoWithCrop->addFilter(2); });
+    auto addFilterToCurrentClip = [this](int mode) {
+        videoWithCrop->addFilter(mode);
+        timeline->setCurrentFilters(videoWithCrop->filterObjects);
+    };
+    connect(blurBtn, &QPushButton::clicked, [=]() { addFilterToCurrentClip(0); });
+    connect(pixelBtn, &QPushButton::clicked, [=]() { addFilterToCurrentClip(1); });
+    connect(solidBtn, &QPushButton::clicked, [=]() { addFilterToCurrentClip(2); });
     connect(videoWithCrop, &VideoWithCropWidget::filtersChanged, this, [this](const QList<VideoWithCropWidget::FilterObject> &filters) {
         persistentFilters = filters;
+        timeline->setCurrentFilters(filters);
     });
 
     connect(player, &QMediaPlayer::durationChanged, [this](qint64 d) {
@@ -432,11 +356,36 @@ void MainWindow::setupConnections() {
         player->setActiveAudioTrack(trackIndex);
     });
 
+    connect(timeline, &TimelineWidget::mediaProbingFinished, this, &MainWindow::refreshMediaState);
+
     connect(videoWithCrop, &VideoWithCropWidget::cropsChanged, timeline, &TimelineWidget::updateCropValues);
+    connect(timeline, &TimelineWidget::requestAddFilter, this, [=](int mode) { addFilterToCurrentClip(mode); });
+    connect(timeline, &TimelineWidget::visualStateChanged, this,
+            [this](float t, float b, float l, float r, const QList<VideoWithCropWidget::FilterObject> &filters) {
+        videoWithCrop->cropT = t;
+        videoWithCrop->cropB = b;
+        videoWithCrop->cropL = l;
+        videoWithCrop->cropR = r;
+        videoWithCrop->filterObjects = filters;
+        persistentFilters = filters;
+        if (videoWithCrop->selectedFilterIdx >= videoWithCrop->filterObjects.size()) {
+            videoWithCrop->selectedFilterIdx = videoWithCrop->filterObjects.isEmpty() ? -1 : videoWithCrop->filterObjects.size() - 1;
+        }
+        if (videoWithCrop->filterObjects.isEmpty()) {
+            videoWithCrop->selectedFilterIdx = -1;
+            videoWithCrop->adjustingFilter = false;
+        }
+        videoWithCrop->update();
+    });
     connect(timeline, &TimelineWidget::clipTrimmed, [this]() {
-        applyStoredFilters();
-        videoWithCrop->cropT = timeline->cropTop; videoWithCrop->cropB = timeline->cropBottom;
-        videoWithCrop->cropL = timeline->cropLeft; videoWithCrop->cropR = timeline->cropRight;
+        float t, b, l, r;
+        QList<VideoWithCropWidget::FilterObject> filters;
+        if (timeline->visualStateForCurrentContext(t, b, l, r, filters)) {
+            videoWithCrop->cropT = t; videoWithCrop->cropB = b;
+            videoWithCrop->cropL = l; videoWithCrop->cropR = r;
+            videoWithCrop->filterObjects = filters;
+            persistentFilters = filters;
+        }
         videoWithCrop->update();
     });
 
@@ -448,10 +397,19 @@ void MainWindow::setupConnections() {
         videoWithCrop->cropL = editorSettings.defaultCropLeft; videoWithCrop->cropR = editorSettings.defaultCropRight;
         videoWithCrop->filterObjects.clear();
         persistentFilters.clear();
+        timeline->setCurrentFilters({});
         timeline->cropTop = editorSettings.defaultCropTop; timeline->cropBottom = editorSettings.defaultCropBottom;
         timeline->cropLeft = editorSettings.defaultCropLeft; timeline->cropRight = editorSettings.defaultCropRight;
+        timeline->applyCurrentVisualsToSelection(true);
         videoWithCrop->update();
         timeline->update();
+    });
+
+    connect(player, &QMediaPlayer::mediaStatusChanged, [this](QMediaPlayer::MediaStatus status) {
+        if (status == QMediaPlayer::EndOfMedia) {
+            player->setPosition(0);
+            player->play();
+        }
     });
 
     playPauseShortcut = new QShortcut(this);
@@ -488,7 +446,7 @@ void MainWindow::toggleVideoFullscreen() {
     stageColumnLayout->removeWidget(videoContainer);
     videoContainer->setParent(nullptr);
 
-    videoFullscreenDialog = new QDialog(this, Qt::FramelessWindowHint);
+    videoFullscreenDialog = new QDialog(this, Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     videoFullscreenDialog->setModal(false);
     videoFullscreenDialog->setObjectName("VideoFullscreenDialog");
     videoFullscreenDialog->setStyleSheet("QDialog#VideoFullscreenDialog { background-color: #000000; }");
@@ -498,10 +456,17 @@ void MainWindow::toggleVideoFullscreen() {
     layout->addWidget(videoContainer, 1);
 
     connect(videoFullscreenDialog, &QDialog::finished, this, [this](int) {
-        restoreVideoFromFullscreen();
+        if (isVideoFullscreen) restoreVideoFromFullscreen();
     });
 
     videoFullscreenDialog->showFullScreen();
+    videoFullscreenDialog->raise();
+    videoFullscreenDialog->activateWindow();
+    
+    // FIX: Ensure container is visible and updated even when paused
+    videoContainer->show();
+    videoContainer->update();
+    videoContainer->setFocus();
 }
 
 void MainWindow::restoreVideoFromFullscreen() {
@@ -513,36 +478,31 @@ void MainWindow::restoreVideoFromFullscreen() {
     if (videoFullscreenDialog) {
         videoFullscreenDialog->blockSignals(true);
         videoFullscreenDialog->hide();
+        videoFullscreenDialog->deleteLater();
+        videoFullscreenDialog = nullptr;
     }
 
-    if (videoContainer->parentWidget() != nullptr) {
-        videoContainer->setParent(nullptr);
-    }
+    videoContainer->setParent(nullptr);
 
     const int placeholderIndex = videoFullscreenPlaceholder ? stageColumnLayout->indexOf(videoFullscreenPlaceholder) : -1;
     if (placeholderIndex >= 0) {
         stageColumnLayout->insertWidget(placeholderIndex, videoContainer, 1);
         stageColumnLayout->removeWidget(videoFullscreenPlaceholder);
+        videoFullscreenPlaceholder->deleteLater();
+        videoFullscreenPlaceholder = nullptr;
     } else {
         stageColumnLayout->addWidget(videoContainer, 1);
     }
-
-    if (videoFullscreenPlaceholder) {
-        videoFullscreenPlaceholder->deleteLater();
-        videoFullscreenPlaceholder = nullptr;
-    }
-
-    if (videoFullscreenDialog) {
-        videoFullscreenDialog->deleteLater();
-        videoFullscreenDialog = nullptr;
-    }
-
+    
+    videoContainer->setFocus();
     videoContainer->show();
     videoContainer->updateGeometry();
 }
 
 void MainWindow::handlePlaybackState(QMediaPlayer::PlaybackState state) {
-    playPauseBtn->setText(state == QMediaPlayer::PlayingState ? "PAUSE" : "PLAY");
+    playPauseBtn->setText(QString());
+    playPauseBtn->setIcon(style()->standardIcon(state == QMediaPlayer::PlayingState ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
+    playPauseBtn->setIconSize(QSize(18, 18));
     playPauseBtn->setProperty("playing", state == QMediaPlayer::PlayingState);
     playPauseBtn->style()->unpolish(playPauseBtn);
     playPauseBtn->style()->polish(playPauseBtn);
@@ -575,6 +535,11 @@ void MainWindow::loadClipDirectly(const QString &filePath) {
                              "That file does not look like audio or video media.");
         return;
     }
+
+    // Update cache and move to top
+    cachedRecentFiles.removeAll(filePath);
+    cachedRecentFiles.prepend(filePath);
+    if (cachedRecentFiles.size() > 100) cachedRecentFiles.removeLast();
 
     currentMediaPath = filePath;
     videoWithCrop->lastFrame = QImage();
@@ -670,6 +635,7 @@ void MainWindow::loadEditorSettings() {
     editorSettings.keyExportVideo = settings.value("keybinds/exportVideo", editorSettings.keyExportVideo).toString();
     editorSettings.keyExportMutedVideo = settings.value("keybinds/exportMutedVideo", editorSettings.keyExportMutedVideo).toString();
     editorSettings.keyCycleAudioTrack = settings.value("keybinds/cycleAudioTrack", editorSettings.keyCycleAudioTrack).toString();
+    editorSettings.autoLoadDirectories = settings.value("ui/autoLoadDirectories").toStringList();
 
     TimelineWidget::PlaybackSettings playback = timeline->getPlaybackSettings();
     playback.majorSeekMs = settings.value("editing/majorSeekMs", playback.majorSeekMs).toInt();
@@ -770,6 +736,7 @@ void MainWindow::saveEditorSettings() const {
     settings.setValue("keybinds/exportVideo", editorSettings.keyExportVideo);
     settings.setValue("keybinds/exportMutedVideo", editorSettings.keyExportMutedVideo);
     settings.setValue("keybinds/cycleAudioTrack", editorSettings.keyCycleAudioTrack);
+    settings.setValue("ui/autoLoadDirectories", editorSettings.autoLoadDirectories);
 
     const auto playback = timeline->getPlaybackSettings();
     settings.setValue("editing/majorSeekMs", playback.majorSeekMs);
@@ -829,14 +796,19 @@ void MainWindow::applyEditorSettings() {
     timeline->m_backgroundColor = QColor(editorSettings.timelineBackgroundColor);
     timeline->m_trackColor = QColor(editorSettings.timelineTrackColor);
     timeline->m_waveformColor = QColor(editorSettings.timelineWaveformColor);
-    if (workspaceContentLayout && clipSidebar) {
-        workspaceContentLayout->removeWidget(clipSidebar);
+
+    if (topPaneSplitter && clipSidebar && timelineTools && workspace) {
         if (editorSettings.sidebarPosition == "right") {
-            workspaceContentLayout->addWidget(clipSidebar);
+            topPaneSplitter->insertWidget(0, workspace);
+            topPaneSplitter->insertWidget(1, timelineTools);
+            topPaneSplitter->insertWidget(2, clipSidebar);
         } else {
-            workspaceContentLayout->insertWidget(0, clipSidebar);
+            topPaneSplitter->insertWidget(0, clipSidebar);
+            topPaneSplitter->insertWidget(1, workspace);
+            topPaneSplitter->insertWidget(2, timelineTools);
         }
     }
+
     timeline->update();
     videoWithCrop->update();
     refreshMediaState();
@@ -892,11 +864,12 @@ QString MainWindow::buildAppStyleSheet() const {
 QWidget { font-family: "%1"; font-size: %2pt; }
 QWidget, QLabel, QCheckBox { color: %29; }
 QPushButton { color: %29; }
- QFrame#toolbar, QFrame#workspace, QFrame#footer, QFrame#clipSidebar, QFrame#PanelHeader, QFrame#VideoContainer, QWidget#timelineTools, QFrame#ActionStrip, QFrame#TimelineShell, QDialog, QMessageBox, QMenu { border-radius: %3px; }
+QFrame#toolbar { border-radius: 0; min-height: 52px; max-height: 52px; }
+QFrame#workspace, QFrame#footer, QFrame#clipSidebar, QFrame#PanelHeader, QFrame#VideoContainer, QWidget#timelineTools, QFrame#ActionStrip, QFrame#TimelineShell, QDialog, QMessageBox, QMenu { border-radius: %3px; }
 QLabel#LogoBold, QLabel#LogoLight { font-size: %4pt; }
 QLabel#CurrentMediaPill, QLabel#MiniBadge { border-radius: %5px; font-size: %16pt; }
 QLabel#MetaData, QLabel#SubtleHint, QLabel#VersionLabel, QLabel#EmptyStateLabel, QLabel#SidebarTitle, QLabel#HeroBody { font-size: %17pt; }
-QPushButton#ActionBtn { border-radius: %6px; }
+QPushButton#ActionBtn { border-radius: %6px; font-size: 18px; padding: 0; }
 QPushButton#PrimaryGhostBtn, QPushButton[class="ToolBtn"], QPushButton#FullscreenBtn, QDialogButtonBox QPushButton, QComboBox, QAbstractSpinBox, QLineEdit, QKeySequenceEdit, QFontComboBox { border-radius: %7px; }
 QLineEdit#ExportNameInput { border-radius: %7px; }
 QWidget#SidebarItem, QWidget#ProgressNotificationBg, QWidget#ToastNotification QLabel#ToastLabel, QProgressBar#ProgressNotificationBar { border-radius: %5px; }
@@ -910,7 +883,7 @@ QPushButton#ActionBtn {
 QPushButton#ActionBtn:hover {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 %14, stop:0.55 %9, stop:1 %8);
 }
-QPushButton#ActionBtn[playing="true"] { color: %8; border-color: %8; }
+QPushButton#ActionBtn[playing="true"] { color: %8; border: 2px solid %8; background: #101216; }
 QPushButton#PrimaryGhostBtn:hover, QPushButton[class="ToolBtn"]:hover, QPushButton#FullscreenBtn:hover { border-color: %8; }
 QSlider::sub-page:horizontal { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 %13, stop:1 %8); }
 QSlider::handle:horizontal { border-color: %9; }
@@ -930,10 +903,16 @@ QCheckBox::indicator:checked { background: qlineargradient(x1:0, y1:0, x2:1, y2:
 QMainWindow#MainCanvas, QWidget#centralWidget, QDialog {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 %18, stop:1 %19);
 }
+QFrame#toolbar {
+    background: %20;
+    border: none;
+    border-bottom: 1px solid %23;
+}
 QFrame#toolbar, QFrame#workspace, QFrame#footer, QFrame#clipSidebar, QFrame#PanelHeader, QWidget#timelineTools, QFrame#ActionStrip, QFrame#TimelineShell, QDialog, QMessageBox, QMenu {
     background: %20;
     border-color: %21;
 }
+QFrame#toolbar { border-color: %23; }
 QFrame#workspace, QFrame#TimelineShell {
     background: %22;
 }
@@ -952,10 +931,39 @@ QLabel#CurrentMediaPill, QLabel#MiniBadge {
 }
 QWidget#SidebarItem {
     background: %22;
+    border: 1px solid %23;
+    border-radius: 6px;
+    margin: 2px 0;
+}
+QWidget#SidebarItem[active="true"] {
+    background: %20;
+    border: 1px solid %8;
+}
+QWidget#SidebarItem:hover {
+    background: %28;
+    border-color: %21;
+}
+PreviewLabel#SidebarPreview {
+    background: #101318;
+    border: 1px solid %23;
+    border-radius: 4px;
+}
+QDialog#SettingsDialog QTabWidget::pane {
+    background: %22;
     border-color: %23;
 }
-QWidget#SidebarItem[active="true"], QWidget#SidebarItem:hover {
+QMenu#TimelineContextMenu {
     background: %20;
+    border: 1px solid %21;
+    padding: 5px;
+}
+QMenu#TimelineContextMenu::item {
+    padding: 6px 22px;
+    border-radius: %7px;
+}
+QMenu#TimelineContextMenu::item:selected {
+    background: %28;
+    color: %29;
 }
 QPushButton#PrimaryGhostBtn, QPushButton[class="ToolBtn"], QPushButton#FullscreenBtn, QDialogButtonBox QPushButton, QComboBox, QAbstractSpinBox, QLineEdit, QKeySequenceEdit, QFontComboBox {
     background: %27;
@@ -967,6 +975,7 @@ QPushButton#PrimaryGhostBtn:hover, QPushButton[class="ToolBtn"]:hover, QPushButt
     background: %28;
     border-color: %21;
 }
+QLabel#StatusLabel { color: %8; font-weight: 800; font-size: 10px; }
 )")
         .arg(editorSettings.appFontFamily)
         .arg(fontSize)
@@ -1019,7 +1028,6 @@ void MainWindow::applyToolButtonOrder() {
         {"pixel", pixelBtn},
         {"blackout", solidBtn},
         {"autocut", autoCutBtn},
-        {"settings", settingsBtn},
         {"resetcrop", resetCropBtn}
     };
 
@@ -1050,20 +1058,42 @@ void MainWindow::openSettingsDialog() {
     QDialog dialog(this);
     dialog.setObjectName("SettingsDialog");
     dialog.setWindowTitle("Potato Editor Settings");
-    dialog.resize(760, 620);
+    dialog.resize(760, 480);
+    dialog.setMinimumSize(560, 360);
+    dialog.setSizeGripEnabled(true);
+    dialog.setStyleSheet(buildAppStyleSheet());
 
     auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(14, 14, 14, 14);
+    layout->setSpacing(10);
     auto *tabs = new QTabWidget(&dialog);
     tabs->setDocumentMode(true);
+    tabs->setTabPosition(QTabWidget::West);
     layout->addWidget(tabs);
+    auto wrapSettingsPage = [&dialog](QWidget *page) {
+        auto *scroll = new QScrollArea(&dialog);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        page->setContentsMargins(8, 8, 8, 8);
+        scroll->setWidget(page);
+        return scroll;
+    };
     auto makeResetButton = [&](QWidget *parent) {
-        auto *button = new QPushButton("Reset This Tab", parent);
-        button->setProperty("class", "ToolBtn");
+        auto *button = new QPushButton("RESET THIS TAB", parent);
+        button->setObjectName("PrimaryGhostBtn");
         return button;
     };
 
     auto *generalTab = new QWidget(&dialog);
     auto *generalForm = new QFormLayout(generalTab);
+    generalForm->setLabelAlignment(Qt::AlignRight);
+
+    auto makeStyledLabel = [&](const QString &text) {
+        auto *label = new QLabel(text);
+        label->setObjectName("SectionLabel");
+        return label;
+    };
     auto *autoPlayCheck = new QCheckBox("Start playback automatically after importing media", generalTab);
     autoPlayCheck->setChecked(editorSettings.autoPlayOnImport);
     auto *updateCheck = new QCheckBox("Check for updates on startup", generalTab);
@@ -1104,26 +1134,27 @@ void MainWindow::openSettingsDialog() {
     auto *toolOrderEdit = new QLineEdit(editorSettings.toolButtonOrder, generalTab);
     generalForm->addRow(autoPlayCheck);
     generalForm->addRow(updateCheck);
-    generalForm->addRow("Default volume", defaultVolumeSpin);
-    generalForm->addRow("Recent media items", recentMediaSpin);
-    generalForm->addRow("Toast duration", notificationSpin);
-    generalForm->addRow("Toast corner", notificationPositionBox);
-    generalForm->addRow("Update check delay", updateDelaySpin);
-    generalForm->addRow("Window title", windowTitleEdit);
-    generalForm->addRow("Logo primary text", logoPrimaryEdit);
-    generalForm->addRow("Logo secondary text", logoSecondaryEdit);
-    generalForm->addRow("Import button text", importButtonEdit);
-    generalForm->addRow("Settings file", settingsPathEdit);
-    generalForm->addRow("Sidebar width", sidebarWidthSpin);
-    generalForm->addRow("Sidebar side", sidebarPositionBox);
-    generalForm->addRow("Tool button order", toolOrderEdit);
+    generalForm->addRow(makeStyledLabel("Default volume"), defaultVolumeSpin);
+    generalForm->addRow(makeStyledLabel("Recent media items"), recentMediaSpin);
+    generalForm->addRow(makeStyledLabel("Toast duration"), notificationSpin);
+    generalForm->addRow(makeStyledLabel("Toast corner"), notificationPositionBox);
+    generalForm->addRow(makeStyledLabel("Update check delay"), updateDelaySpin);
+    generalForm->addRow(makeStyledLabel("Window title"), windowTitleEdit);
+    generalForm->addRow(makeStyledLabel("Logo primary text"), logoPrimaryEdit);
+    generalForm->addRow(makeStyledLabel("Logo secondary text"), logoSecondaryEdit);
+    generalForm->addRow(makeStyledLabel("Import button text"), importButtonEdit);
+    generalForm->addRow(makeStyledLabel("Settings file"), settingsPathEdit);
+    generalForm->addRow(makeStyledLabel("Sidebar width"), sidebarWidthSpin);
+    generalForm->addRow(makeStyledLabel("Sidebar side"), sidebarPositionBox);
+    generalForm->addRow(makeStyledLabel("Tool button order"), toolOrderEdit);
     auto *generalResetBtn = makeResetButton(generalTab);
     generalForm->addRow(generalResetBtn);
-    tabs->addTab(generalTab, "General");
+    tabs->addTab(wrapSettingsPage(generalTab), "General");
 
     const auto playback = timeline->getPlaybackSettings();
     auto *editingTab = new QWidget(&dialog);
     auto *editingForm = new QFormLayout(editingTab);
+    editingForm->setLabelAlignment(Qt::AlignRight);
     auto *majorSeekSpin = new QSpinBox(editingTab);
     majorSeekSpin->setRange(100, 30000);
     majorSeekSpin->setSuffix(" ms");
@@ -1165,22 +1196,22 @@ void MainWindow::openSettingsDialog() {
     auto *emptyHintEdit = new QLineEdit(editorSettings.emptyTransportHint, editingTab);
     auto *videoHintEdit = new QLineEdit(editorSettings.videoTransportHint, editingTab);
     auto *audioHintEdit = new QLineEdit(editorSettings.audioTransportHint, editingTab);
-    editingForm->addRow("Replay / jump step", majorSeekSpin);
-    editingForm->addRow("Frame step", minorSeekSpin);
-    editingForm->addRow("Split edge safety", splitGuardSpin);
-    editingForm->addRow("Minimum segment length", minSegmentSpin);
-    editingForm->addRow("Default crop top", cropTopSpin);
-    editingForm->addRow("Default crop bottom", cropBottomSpin);
-    editingForm->addRow("Default crop left", cropLeftSpin);
-    editingForm->addRow("Default crop right", cropRightSpin);
-    editingForm->addRow("Preview empty title", previewTitleEdit);
-    editingForm->addRow("Preview empty body", previewBodyEdit);
-    editingForm->addRow("No media hint", emptyHintEdit);
-    editingForm->addRow("Video hint", videoHintEdit);
-    editingForm->addRow("Audio hint", audioHintEdit);
+    editingForm->addRow(makeStyledLabel("Replay / jump step"), majorSeekSpin);
+    editingForm->addRow(makeStyledLabel("Frame step"), minorSeekSpin);
+    editingForm->addRow(makeStyledLabel("Split edge safety"), splitGuardSpin);
+    editingForm->addRow(makeStyledLabel("Minimum segment length"), minSegmentSpin);
+    editingForm->addRow(makeStyledLabel("Default crop top"), cropTopSpin);
+    editingForm->addRow(makeStyledLabel("Default crop bottom"), cropBottomSpin);
+    editingForm->addRow(makeStyledLabel("Default crop left"), cropLeftSpin);
+    editingForm->addRow(makeStyledLabel("Default crop right"), cropRightSpin);
+    editingForm->addRow(makeStyledLabel("Preview empty title"), previewTitleEdit);
+    editingForm->addRow(makeStyledLabel("Preview empty body"), previewBodyEdit);
+    editingForm->addRow(makeStyledLabel("No media hint"), emptyHintEdit);
+    editingForm->addRow(makeStyledLabel("Video hint"), videoHintEdit);
+    editingForm->addRow(makeStyledLabel("Audio hint"), audioHintEdit);
     auto *editingResetBtn = makeResetButton(editingTab);
     editingForm->addRow(editingResetBtn);
-    tabs->addTab(editingTab, "Editing");
+    tabs->addTab(wrapSettingsPage(editingTab), "Editing");
 
     auto *appearanceTab = new QWidget(&dialog);
     auto *appearanceForm = new QFormLayout(appearanceTab);
@@ -1297,7 +1328,7 @@ void MainWindow::openSettingsDialog() {
     appearanceForm->addRow("Button corner radius", buttonRadiusSpin);
     auto *appearanceResetBtn = makeResetButton(appearanceTab);
     appearanceForm->addRow(appearanceResetBtn);
-    tabs->addTab(appearanceTab, "Appearance");
+    tabs->addTab(wrapSettingsPage(appearanceTab), "Appearance");
 
     auto *keybindTab = new QWidget(&dialog);
     auto *keybindForm = new QFormLayout(keybindTab);
@@ -1331,7 +1362,7 @@ void MainWindow::openSettingsDialog() {
     keybindForm->addRow("Cycle audio track", cycleAudioKeyEdit);
     auto *keybindResetBtn = makeResetButton(keybindTab);
     keybindForm->addRow(keybindResetBtn);
-    tabs->addTab(keybindTab, "Keybinds");
+    tabs->addTab(wrapSettingsPage(keybindTab), "Keybinds");
 
     const auto exportSettings = timeline->getExportSettings();
     auto *exportTab = new QWidget(&dialog);
@@ -1382,7 +1413,7 @@ void MainWindow::openSettingsDialog() {
     exportForm->addRow(includeSourceNameCheck);
     auto *exportResetBtn = makeResetButton(exportTab);
     exportForm->addRow(exportResetBtn);
-    tabs->addTab(exportTab, "Export");
+    tabs->addTab(wrapSettingsPage(exportTab), "Export");
 
     const auto current = timeline->getAutoCutSettings();
     auto *autoCutTab = new QWidget(&dialog);
@@ -1417,7 +1448,23 @@ void MainWindow::openSettingsDialog() {
     autoCutForm->addRow("Min kept clip", minClipSpin);
     auto *autoCutResetBtn = makeResetButton(autoCutTab);
     autoCutForm->addRow(autoCutResetBtn);
-    tabs->addTab(autoCutTab, "Auto-Cut");
+    tabs->addTab(wrapSettingsPage(autoCutTab), "Auto-Cut");
+
+    auto *mediaTab = new QWidget(&dialog);
+    auto *mediaLayout = new QVBoxLayout(mediaTab);
+    auto *dirList = new QListWidget(mediaTab);
+    dirList->addItems(editorSettings.autoLoadDirectories);
+    auto *dirButtons = new QHBoxLayout();
+    auto *addDirBtn = new QPushButton("ADD FOLDER", mediaTab);
+    auto *removeDirBtn = new QPushButton("REMOVE SELECTED", mediaTab);
+    addDirBtn->setObjectName("ToolBtn");
+    removeDirBtn->setObjectName("ToolBtn");
+    dirButtons->addWidget(addDirBtn);
+    dirButtons->addWidget(removeDirBtn);
+    mediaLayout->addWidget(new QLabel("AUTO-LOAD FOLDERS (SCANNED AT STARTUP):", mediaTab));
+    mediaLayout->addWidget(dirList);
+    mediaLayout->addLayout(dirButtons);
+    tabs->addTab(wrapSettingsPage(mediaTab), "Media");
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
     auto *importThemeBtn = buttons->addButton("Import Theme", QDialogButtonBox::ActionRole);
@@ -1525,6 +1572,18 @@ void MainWindow::openSettingsDialog() {
         minSilenceSpin->setValue(defaults.minimumSilenceDurationSec);
         paddingSpin->setValue(defaults.paddingSec);
         minClipSpin->setValue(defaults.minimumClipDurationSec);
+    });
+    connect(addDirBtn, &QPushButton::clicked, &dialog, [this, dirList]() {
+        QString dir = QFileDialog::getExistingDirectory(this, "Select Media Folder", QDir::homePath());
+        if (!dir.isEmpty()) {
+            if (dirList->findItems(dir, Qt::MatchExactly).isEmpty()) {
+                dirList->addItem(dir);
+            }
+        }
+    });
+    connect(removeDirBtn, &QPushButton::clicked, &dialog, [dirList]() {
+        QListWidgetItem *item = dirList->currentItem();
+        if (item) delete item;
     });
     connect(importThemeBtn, &QPushButton::clicked, &dialog, [=]() {
         const QString path = QFileDialog::getOpenFileName(this, "Import Theme", QDir::homePath(), "Theme Files (*.json)");
@@ -1638,35 +1697,35 @@ void MainWindow::openSettingsDialog() {
         if (path.isEmpty()) return;
         QJsonObject root;
         root["general"] = QJsonObject{
-            {"autoPlayOnImport", autoPlayCheck->isChecked()},
-            {"checkForUpdatesOnStartup", updateCheck->isChecked()},
-            {"defaultVolumePercent", defaultVolumeSpin->value()},
-            {"recentMediaLimit", recentMediaSpin->value()},
-            {"notificationDurationMs", notificationSpin->value()},
-            {"notificationPosition", notificationPositionBox->currentText()},
-            {"updateCheckDelayMs", updateDelaySpin->value()},
-            {"windowTitle", windowTitleEdit->text()},
-            {"logoPrimaryText", logoPrimaryEdit->text()},
-            {"logoSecondaryText", logoSecondaryEdit->text()},
-            {"importButtonText", importButtonEdit->text()},
-            {"sidebarWidth", sidebarWidthSpin->value()},
-            {"sidebarPosition", sidebarPositionBox->currentText()},
-            {"toolButtonOrder", toolOrderEdit->text()}
+            {"autoPlayOnImport", QJsonValue(autoPlayCheck->isChecked())},
+            {"checkForUpdatesOnStartup", QJsonValue(updateCheck->isChecked())},
+            {"defaultVolumePercent", QJsonValue(defaultVolumeSpin->value())},
+            {"recentMediaLimit", QJsonValue(recentMediaSpin->value())},
+            {"notificationDurationMs", QJsonValue(notificationSpin->value())},
+            {"notificationPosition", QJsonValue(notificationPositionBox->currentText())},
+            {"updateCheckDelayMs", QJsonValue(updateDelaySpin->value())},
+            {"windowTitle", QJsonValue(windowTitleEdit->text())},
+            {"logoPrimaryText", QJsonValue(logoPrimaryEdit->text())},
+            {"logoSecondaryText", QJsonValue(logoSecondaryEdit->text())},
+            {"importButtonText", QJsonValue(importButtonEdit->text())},
+            {"sidebarWidth", QJsonValue(sidebarWidthSpin->value())},
+            {"sidebarPosition", QJsonValue(sidebarPositionBox->currentText())},
+            {"toolButtonOrder", QJsonValue(toolOrderEdit->text())}
         };
         root["editing"] = QJsonObject{
-            {"majorSeekMs", majorSeekSpin->value()},
-            {"minorSeekMs", minorSeekSpin->value()},
-            {"splitGuardMs", splitGuardSpin->value()},
-            {"minSegmentDurationMs", minSegmentSpin->value()},
-            {"defaultCropTop", cropTopSpin->value()},
-            {"defaultCropBottom", cropBottomSpin->value()},
-            {"defaultCropLeft", cropLeftSpin->value()},
-            {"defaultCropRight", cropRightSpin->value()},
-            {"previewPlaceholderTitle", previewTitleEdit->text()},
-            {"previewPlaceholderBody", previewBodyEdit->text()},
-            {"emptyTransportHint", emptyHintEdit->text()},
-            {"videoTransportHint", videoHintEdit->text()},
-            {"audioTransportHint", audioHintEdit->text()}
+            {"majorSeekMs", QJsonValue(majorSeekSpin->value())},
+            {"minorSeekMs", QJsonValue(minorSeekSpin->value())},
+            {"splitGuardMs", QJsonValue(splitGuardSpin->value())},
+            {"minSegmentDurationMs", QJsonValue(minSegmentSpin->value())},
+            {"defaultCropTop", QJsonValue(cropTopSpin->value())},
+            {"defaultCropBottom", QJsonValue(cropBottomSpin->value())},
+            {"defaultCropLeft", QJsonValue(cropLeftSpin->value())},
+            {"defaultCropRight", QJsonValue(cropRightSpin->value())},
+            {"previewPlaceholderTitle", QJsonValue(previewTitleEdit->text())},
+            {"previewPlaceholderBody", QJsonValue(previewBodyEdit->text())},
+            {"emptyTransportHint", QJsonValue(emptyHintEdit->text())},
+            {"videoTransportHint", QJsonValue(videoHintEdit->text())},
+            {"audioHintEdit", QJsonValue(audioHintEdit->text())}
         };
         root["appearance"] = QJsonObject{
             {"timelineAccentColor", timelineAccentEdit->text()},
@@ -1739,6 +1798,12 @@ void MainWindow::openSettingsDialog() {
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
 
     if (dialog.exec() != QDialog::Accepted) return;
+
+    QStringList finalDirs;
+    for(int i = 0; i < dirList->count(); ++i) {
+        finalDirs << dirList->item(i)->text();
+    }
+    editorSettings.autoLoadDirectories = finalDirs;
 
     editorSettings.autoPlayOnImport = autoPlayCheck->isChecked();
     editorSettings.checkForUpdatesOnStartup = updateCheck->isChecked();
@@ -1837,21 +1902,26 @@ void MainWindow::openSettingsDialog() {
 }
 
 QStringList MainWindow::collectRecentMediaFiles() const {
+    if (!cachedRecentFiles.isEmpty()) return cachedRecentFiles;
+
     QList<QFileInfo> files;
-    const QStringList roots = {
-        QStandardPaths::writableLocation(QStandardPaths::MoviesLocation),
-        QStandardPaths::writableLocation(QStandardPaths::MusicLocation)
+    QStringList roots = {
+        QStandardPaths::writableLocation(QStandardPaths::MoviesLocation)
     };
+    roots.append(editorSettings.autoLoadDirectories);
+
+    QStringList nameFilters;
+    for (const QString &ext : MediaUtils::knownVideoExtensions()) {
+        nameFilters << "*." + ext;
+    }
+    for (const QString &ext : MediaUtils::knownAudioExtensions()) {
+        nameFilters << "*." + ext;
+    }
 
     for (const QString &root : roots) {
-        if (root.isEmpty()) continue;
+        if (root.isEmpty() || !QDir(root).exists()) continue;
         QDir dir(root);
-        const QFileInfoList entries = dir.entryInfoList(QDir::Files, QDir::Time);
-        for (const QFileInfo &entry : entries) {
-            if (MediaUtils::isSupportedMediaFile(entry.absoluteFilePath())) {
-                files.append(entry);
-            }
-        }
+        files.append(dir.entryInfoList(nameFilters, QDir::Files));
     }
 
     std::sort(files.begin(), files.end(), [](const QFileInfo &a, const QFileInfo &b) {
@@ -1861,11 +1931,14 @@ QStringList MainWindow::collectRecentMediaFiles() const {
     QStringList uniqueFiles;
     QSet<QString> seen;
     for (const QFileInfo &info : files) {
-        if (seen.contains(info.absoluteFilePath())) continue;
-        seen.insert(info.absoluteFilePath());
-        uniqueFiles.append(info.absoluteFilePath());
-        if (uniqueFiles.size() >= editorSettings.recentMediaLimit) break;
+        QString path = info.absoluteFilePath();
+        if (seen.contains(path)) continue;
+        seen.insert(path);
+        uniqueFiles.append(path);
+        if (uniqueFiles.size() >= 100) break;
     }
+    
+    const_cast<MainWindow*>(this)->cachedRecentFiles = uniqueFiles;
     return uniqueFiles;
 }
 
@@ -1877,7 +1950,8 @@ void MainWindow::closeEvent(QCloseEvent *event) {
 void MainWindow::refreshMediaState() {
     if (currentMediaPath.isEmpty()) {
         currentMediaLabel->setText("NO MEDIA LOADED");
-        statusLabel->setText("READY FOR MEDIA");
+        statusLabel->clear();
+        statusLabel->hide();
         transportHintLabel->hide();
         videoWithCrop->setPlaceholderState(editorSettings.previewPlaceholderTitle, editorSettings.previewPlaceholderBody);
         blurBtn->setEnabled(false);
@@ -1896,7 +1970,8 @@ void MainWindow::refreshMediaState() {
 
     currentMediaLabel->setText(QString("%1 - %2")
                                    .arg(info.fileName().toUpper(), buildMediaBadgeText(hasVideo, hasAudio)));
-    statusLabel->setText(QString("%1 READY").arg(buildMediaBadgeText(hasVideo, hasAudio)));
+    statusLabel->clear();
+    statusLabel->hide();
     transportHintLabel->hide();
 
     blurBtn->setEnabled(hasVideo);
@@ -1917,74 +1992,99 @@ void MainWindow::refreshMediaState() {
 }
 
 void MainWindow::updateSidebar() {
-    QLayoutItem *child;
-    while ((child = sidebarListLayout->takeAt(0)) != nullptr) {
-        if (child->widget()) child->widget()->deleteLater();
-        delete child;
-    }
-
     const QStringList recentFiles = collectRecentMediaFiles();
     sidebarCountLabel->setText(QString("%1 ITEMS").arg(recentFiles.size()));
     sidebarEmptyLabel->setVisible(recentFiles.isEmpty());
     sidebarScroll->setVisible(!recentFiles.isEmpty());
 
-    for (const QString &filePath : recentFiles) {
+    // Reuse existing widgets if possible
+    int existingCount = sidebarListLayout->count();
+    // Remove the stretch at the end if it exists
+    if (existingCount > 0) {
+        QLayoutItem* lastItem = sidebarListLayout->itemAt(existingCount - 1);
+        if (lastItem->spacerItem()) {
+            sidebarListLayout->removeItem(lastItem);
+            delete lastItem;
+            existingCount--;
+        }
+    }
+
+    // Update or create widgets
+    for (int i = 0; i < recentFiles.size(); ++i) {
+        const QString &filePath = recentFiles[i];
         const QFileInfo info(filePath);
         const bool isActive = info.absoluteFilePath() == currentMediaPath;
-        QWidget *clipContainer = new QWidget();
-        clipContainer->setObjectName("SidebarItem");
+        
+        QWidget* clipContainer = nullptr;
+        if (i < existingCount) {
+            clipContainer = sidebarListLayout->itemAt(i)->widget();
+        }
+
+        if (!clipContainer) {
+            clipContainer = new QWidget();
+            clipContainer->setObjectName("SidebarItem");
+            
+            QHBoxLayout *rowContentLayout = new QHBoxLayout(clipContainer);
+            rowContentLayout->setContentsMargins(8, 8, 8, 8);
+            rowContentLayout->setSpacing(8);
+
+            PreviewLabel *preview = new PreviewLabel(info.absoluteFilePath(), clipContainer);
+            preview->setObjectName("SidebarPreview");
+            preview->setFixedSize(76, 44);
+
+            QWidget *textInfo = new QWidget(clipContainer);
+            textInfo->setAttribute(Qt::WA_TranslucentBackground);
+            QVBoxLayout *textLayout = new QVBoxLayout(textInfo);
+            textLayout->setContentsMargins(0, 0, 0, 0);
+            textLayout->setSpacing(1);
+
+            QLabel *nameLabel = new QLabel();
+            nameLabel->setObjectName("SidebarTitle");
+
+            QLabel *metaLabel = new QLabel();
+            metaLabel->setObjectName("MetaData");
+
+            textLayout->addWidget(nameLabel);
+            textLayout->addWidget(metaLabel);
+            textLayout->addStretch();
+
+            rowContentLayout->addWidget(preview);
+            rowContentLayout->addWidget(textInfo, 1);
+
+            clipContainer->setCursor(Qt::PointingHandCursor);
+            clipContainer->installEventFilter(this);
+            sidebarListLayout->addWidget(clipContainer);
+        }
+
+        // Update properties and text
         clipContainer->setProperty("active", isActive);
-
-        QHBoxLayout *rowLayout = new QHBoxLayout(clipContainer);
-        rowLayout->setContentsMargins(0, 0, 0, 0);
-        rowLayout->setSpacing(0);
-
-        QWidget *selectionRail = new QWidget(clipContainer);
-        selectionRail->setObjectName("SidebarSelectionRail");
-        selectionRail->setProperty("active", isActive);
-        selectionRail->setFixedWidth(3);
-
-        QWidget *rowContent = new QWidget(clipContainer);
-        rowContent->setAttribute(Qt::WA_TranslucentBackground);
-        QHBoxLayout *rowContentLayout = new QHBoxLayout(rowContent);
-        rowContentLayout->setContentsMargins(8, 8, 8, 8);
-        rowContentLayout->setSpacing(8);
-
-        PreviewLabel *preview = new PreviewLabel(info.absoluteFilePath(), rowContent);
-        preview->setFixedSize(76, 44);
-
-        QWidget *textInfo = new QWidget(rowContent);
-        textInfo->setAttribute(Qt::WA_TranslucentBackground);
-        QVBoxLayout *textLayout = new QVBoxLayout(textInfo);
-        textLayout->setContentsMargins(0, 0, 0, 0);
-        textLayout->setSpacing(1);
-
-        QLabel *nameLabel = new QLabel();
-        nameLabel->setObjectName("SidebarTitle");
-        QFontMetrics metrics(nameLabel->font());
-        QString elidedName = metrics.elidedText(info.completeBaseName().toUpper(), Qt::ElideRight, 108);
-        nameLabel->setText(elidedName);
-
-        QString sizeStr = QString::number(info.size() / (1024 * 1024.0), 'f', 1) + "MB";
-        const QString typeText = MediaUtils::isKnownAudioFile(info.absoluteFilePath()) ? "AUDIO" : "VIDEO";
-        QLabel *metaLabel = new QLabel(QString("%1 | %2").arg(typeText, sizeStr));
-        metaLabel->setObjectName("MetaData");
-
-        textLayout->addWidget(nameLabel);
-        textLayout->addWidget(metaLabel);
-        textLayout->addStretch();
-
-        rowContentLayout->addWidget(preview);
-        rowContentLayout->addWidget(textInfo, 1);
-        rowLayout->addWidget(selectionRail);
-        rowLayout->addWidget(rowContent, 1);
-
-        clipContainer->setCursor(Qt::PointingHandCursor);
-        clipContainer->installEventFilter(this);
         clipContainer->setProperty("filePath", info.absoluteFilePath());
+        
+        QLabel* nameLabel = clipContainer->findChild<QLabel*>("SidebarTitle");
+        if (nameLabel) {
+            QFontMetrics metrics(nameLabel->font());
+            nameLabel->setText(metrics.elidedText(info.completeBaseName().toUpper(), Qt::ElideRight, 108));
+        }
 
-        sidebarListLayout->addWidget(clipContainer);
+        QLabel* metaLabel = clipContainer->findChild<QLabel*>("MetaData");
+        if (metaLabel) {
+            QString sizeStr = QString::number(info.size() / (1024 * 1024.0), 'f', 1) + "MB";
+            const QString typeText = MediaUtils::isKnownAudioFile(info.absoluteFilePath()) ? "AUDIO" : "VIDEO";
+            metaLabel->setText(QString("%1 | %2").arg(typeText, sizeStr));
+        }
+
+        // Style updates for property changes
+        clipContainer->style()->unpolish(clipContainer);
+        clipContainer->style()->polish(clipContainer);
     }
+
+    // Remove excess widgets
+    while (sidebarListLayout->count() > recentFiles.size()) {
+        QLayoutItem* item = sidebarListLayout->takeAt(recentFiles.size());
+        if (item->widget()) item->widget()->deleteLater();
+        delete item;
+    }
+
     sidebarListLayout->addStretch(1);
 }
 
@@ -2001,7 +2101,15 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
 }
 
 void MainWindow::loadInitialVideo() {
-    // Keep startup responsive by showing the empty editor first instead of
-    // probing and decoding the newest media file during window construction.
     refreshMediaState();
+    QTimer::singleShot(0, this, [this]() {
+        if (!currentMediaPath.isEmpty()) return;
+        const QStringList recentFiles = collectRecentMediaFiles();
+        for (const QString &path : recentFiles) {
+            if (MediaUtils::isKnownVideoFile(path)) {
+                loadClipDirectly(path);
+                return;
+            }
+        }
+    });
 }

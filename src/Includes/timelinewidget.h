@@ -18,6 +18,8 @@
 #include <QPushButton>
 #include <QStyle>
 #include <QString>
+#include <QQueue>
+#include "mediaSource.h"
 
 class QProcess;
 
@@ -64,13 +66,7 @@ class TimelineWidget : public QWidget {
    Q_PROPERTY(QColor trackColor MEMBER m_trackColor)
    Q_PROPERTY(QColor waveformColor MEMBER m_waveformColor)
 public slots:
-    void updateCropValues(float t, float b, float l, float r) {
-        cropTop = t;
-        cropBottom = b;
-        cropLeft = l;
-        cropRight = r;
-        update(); // Refresh the EST SIZE badge math
-    }
+    void updateCropValues(float t, float b, float l, float r);
 
     void updateFilterValues(float t, float b, float l, float r, int mode, bool enabled) {
         filterT = t;
@@ -115,6 +111,11 @@ public:
         float pitch = 1.0f;
         bool muted = false;
         float gain = 1.0f;
+        float cropTop = 0.0f;
+        float cropBottom = 1.0f;
+        float cropLeft = 0.0f;
+        float cropRight = 1.0f;
+        QList<VideoWithCropWidget::FilterObject> filters;
     };
 
     struct TextSegment {
@@ -137,7 +138,7 @@ public:
 
     void setMediaSource(const QUrl &url);
     void setDuration(qint64 ms);
-    void setCurrentPosition(qint64 ms) { currentPosMs = ms; update(); }
+    void setCurrentPosition(qint64 ms);
 
     int currentAudioTrack = 0;
     int totalAudioTracks = 1;
@@ -177,6 +178,11 @@ public:
     void setPlaybackSettings(const PlaybackSettings &settings) { playbackSettings = settings; }
     ExportSettings getExportSettings() const { return exportSettings; }
     void setExportSettings(const ExportSettings &settings) { exportSettings = settings; }
+    void setCurrentFilters(const QList<VideoWithCropWidget::FilterObject> &filters);
+    void applyCurrentVisualsToSelection(bool allSegments);
+    void clearVisualsForSelection(bool allSegments);
+    bool visualStateForCurrentContext(float &t, float &b, float &l, float &r,
+                                      QList<VideoWithCropWidget::FilterObject> &filters) const;
     QColor m_accentColor = QColor("#3D5AFE"); // Defaults in case QSS fails
     QColor m_secondaryColor = QColor("#FF3232");
     QColor m_backgroundColor = QColor("#080809");
@@ -199,6 +205,9 @@ signals:
     void audioGainChanged(float gain);
     void audioTrackChanged(int index);
     void requestAudioTrackChange(int index);
+    void mediaProbingFinished();
+    void visualStateChanged(float t, float b, float l, float r, QList<VideoWithCropWidget::FilterObject> filters);
+    void requestAddFilter(int mode);
 protected:
     void paintEvent(QPaintEvent* event) override;
 
@@ -237,6 +246,8 @@ private:
     QMediaPlayer* thumbPlayer;
     QVideoSink* videoSink;
     QMap<int, QImage> thumbnailCache;
+    QQueue<int> thumbnailRequestQueue;
+    bool thumbnailRequestActive = false;
     QVector<float> audioSamples;
     QUrl currentFileUrl;
     qint64 originalFileSize = 0;
@@ -268,9 +279,17 @@ private:
         "All audio", "All discord audio + mic", "Only discord audio",
         "Chromium + mic", "WEBRTC VoiceEngine + mic", "everything excluding discord", "Chromium only", "WEBRTC VoiceEngine only"
     };
+    QList<VideoWithCropWidget::FilterObject> currentFilters;
 
     void loadAudioFast(const QString &path);
     void processVideoFrame(const QVideoFrame &frame);
+    void requestTimelineThumbnails();
+    void requestNextTimelineThumbnail();
+    int segmentIndexAtTime(qint64 timeMs) const;
+    int activeVisualSegmentIndex() const;
+    QSet<int> targetVisualSegments() const;
+    void emitVisualStateForCurrentContext();
+    void showClipContextMenu(const QPoint &globalPos, qint64 clickTime, int clickedIdx);
 
 
     static void showNotification(const QString &message);

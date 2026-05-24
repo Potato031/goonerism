@@ -25,6 +25,7 @@
 #include <QVBoxLayout>
 #include <QDialog>
 #include <QList>
+#include <QSplitter>
 #include <QCloseEvent>
 #include <QStringList>
 
@@ -100,6 +101,7 @@ public:
         QString keyExportVideo = "Ctrl+C";
         QString keyExportMutedVideo = "Ctrl+Alt+C";
         QString keyCycleAudioTrack = "Alt+A";
+        QStringList autoLoadDirectories;
     };
 
     MainWindow(QWidget *parent = nullptr);
@@ -116,6 +118,10 @@ private slots:
 private:
     bool isVideoFullscreen = false;
     void setupUi();
+    void setupToolbar();
+    void setupSidebar();
+    void setupWorkspace();
+    void setupTimeline();
     void setupConnections();
     void loadInitialVideo();
     void toggleVideoFullscreen();
@@ -134,8 +140,11 @@ private:
     QFrame* toolbar;
     QFrame* footer;
     QWidget* timelineTools;
-    QHBoxLayout* timelineToolsLayout;
+    QVBoxLayout* timelineToolsLayout;
     TimelineWidget* timeline;
+    QFrame* timelineShell;
+    QSplitter* mainSplitter;
+    QSplitter* topPaneSplitter;
     QFrame* workspace;
     QHBoxLayout* workspaceContentLayout;
     QVBoxLayout* stageColumnLayout;
@@ -172,6 +181,7 @@ private:
     QWidget* sidebarContent;
     QVBoxLayout* sidebarListLayout;
     QString currentMediaPath;
+    QStringList cachedRecentFiles;
     QList<VideoWithCropWidget::FilterObject> persistentFilters;
     EditorSettings editorSettings;
     QShortcut* playPauseShortcut;

@@ -32,10 +32,12 @@ QMenu {
 }
 
 QFrame#toolbar {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                stop:0 #1b1f26,
-                                stop:0.5 #20252e,
-                                stop:1 #191d24);
+    background: #181c22;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+    border-radius: 0;
+    min-height: 52px;
+    max-height: 52px;
 }
 
 QFrame#workspace,
@@ -49,6 +51,12 @@ QFrame#ActionStrip,
 QFrame#clipSidebar,
 QFrame#footer {
     background: #1d2128;
+}
+
+QFrame#clipSidebar,
+QWidget#timelineTools,
+QFrame#TimelineShell {
+    border-color: rgba(255, 255, 255, 0.055);
 }
 
 QFrame#VideoContainer {
@@ -127,8 +135,15 @@ QLabel#EmptyStateLabel {
 
 QLabel#SidebarTitle {
     color: #f1f4f7;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+QLabel#SidebarCountLabel {
+    color: rgba(186, 193, 203, 0.45);
     font-size: 11px;
     font-weight: 800;
+    padding: 8px 0;
 }
 
 QPushButton {
@@ -140,12 +155,11 @@ QPushButton#ActionBtn {
                                 stop:0 #ff875f,
                                 stop:1 #ff6b4a);
     border: none;
-    border-radius: 7px;
+    border-radius: 20px;
     color: #ffffff;
-    font-size: 9px;
+    font-size: 18px;
     font-weight: 900;
-    letter-spacing: 1px;
-    padding: 0 14px;
+    padding: 0;
 }
 
 QPushButton#ActionBtn:hover {
@@ -157,7 +171,7 @@ QPushButton#ActionBtn:hover {
 QPushButton#ActionBtn[playing="true"] {
     background: #101216;
     color: #ff9f7f;
-    border: 1px solid rgba(255, 135, 95, 0.35);
+    border: 2px solid rgba(255, 135, 95, 0.45);
 }
 
 QPushButton#PrimaryGhostBtn,
@@ -231,7 +245,7 @@ QPushButton#FullscreenBtn {
     min-width: 34px;
     min-height: 34px;
     padding: 0;
-    margin: 8px;
+    margin: 0;
 }
 
 QLineEdit#ExportNameInput {
@@ -245,6 +259,19 @@ QTabWidget::pane {
     border-radius: 8px;
     margin-top: 8px;
     padding: 6px;
+}
+
+QDialog#SettingsDialog {
+    background: #171b21;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+QDialog#SettingsDialog QTabWidget::pane {
+    background: #1b2027;
+}
+
+QDialog#SettingsDialog QWidget {
+    background: transparent;
 }
 
 QTabBar::tab {
@@ -372,9 +399,10 @@ QScrollBar::sub-line:horizontal {
 }
 
 QWidget#SidebarItem {
-    background: #20252d;
-    border: 1px solid rgba(255, 255, 255, 0.045);
+    background: #1a1f26;
+    border: 1px solid rgba(255, 255, 255, 0.055);
     border-radius: 6px;
+    margin: 2px 0;
 }
 
 QWidget#SidebarSelectionRail {
@@ -392,12 +420,18 @@ QWidget#SidebarSelectionRail[active="true"] {
 
 QWidget#SidebarItem[active="true"] {
     background: #242a33;
-    border: 1px solid rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(255, 135, 95, 0.52);
 }
 
 QWidget#SidebarItem:hover {
-    background: #292f39;
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: #252b34;
+    border: 1px solid rgba(255, 135, 95, 0.24);
+}
+
+PreviewLabel#SidebarPreview {
+    background: #101318;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
 }
 
 QWidget#ProgressNotificationBg {

@@ -11,6 +11,8 @@
 #include <QWidget>
 #include <QList>
 #include <QString>
+#include <QtConcurrent>
+#include <QMutex>
 
 class VideoWithCropWidget : public QWidget {
     Q_OBJECT
@@ -42,6 +44,11 @@ public:
     enum Edge { None, Center, TopLeft, TopRight, BottomLeft, BottomRight };
     Edge activeEdge = None;
 
+    // PERFORMANCE: Atomic flag and mutex for off-thread frame processing
+    QAtomicInt m_isProcessing{0};
+    QMutex m_frameMutex;
+    QVideoFrame m_lastRawFrame; 
+
     explicit VideoWithCropWidget(QWidget* parent = nullptr) : QWidget(parent) {
         sink = new QVideoSink(this);
         setMouseTracking(true);
@@ -50,8 +57,56 @@ public:
         this->setAttribute(Qt::WA_StyledBackground, true);
 
         connect(sink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame){
-            lastFrame = frame.toImage();
-            update();
+            if (!frame.isValid()) return;
+            
+            {
+                QMutexLocker locker(&m_frameMutex);
+                m_lastRawFrame = frame;
+            }
+
+            triggerScale();
+        });
+    }
+
+    void triggerScale() {
+        if (!m_lastRawFrame.isValid()) return;
+        if (!m_isProcessing.testAndSetRelaxed(0, 1)) return;
+
+        QRect tr = calculateTargetRect();
+        QSize targetSize = tr.size();
+        if (targetSize.isEmpty()) {
+            m_isProcessing = 0;
+            return;
+        }
+
+        (void)QtConcurrent::run(QThreadPool::globalInstance(), [this, targetSize]() {
+            QVideoFrame localFrame;
+            {
+                QMutexLocker locker(&m_frameMutex);
+                localFrame = m_lastRawFrame;
+            }
+
+            QImage sourceImage = localFrame.toImage();
+            if (sourceImage.isNull()) {
+                m_isProcessing = 0;
+                return;
+            }
+
+            const int sourceWidth = sourceImage.width();
+            const int sourceHeight = sourceImage.height();
+            QImage img = sourceImage.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            
+            {
+                QMutexLocker locker(&m_frameMutex);
+                lastFrame = img;
+            }
+            
+            m_isProcessing = 0;
+            QMetaObject::invokeMethod(this, [this, sourceWidth, sourceHeight]() {
+                setProperty("actualWidth", sourceWidth);
+                setProperty("actualHeight", sourceHeight);
+                update();
+            }, Qt::QueuedConnection);
         });
     }
 
@@ -92,11 +147,26 @@ public:
                      bounds.height());
     }
 
+    QRect displayedFrameRect(const QRect &targetRect, const QImage &frame) const {
+        if (frame.isNull()) return targetRect;
+        const int xOffset = (targetRect.width() - frame.width()) / 2;
+        const int yOffset = (targetRect.height() - frame.height()) / 2;
+        return QRect(targetRect.topLeft() + QPoint(xOffset, yOffset), frame.size());
+    }
+
+    // Static buffer to avoid allocation jitter at 60fps
+    QImage previewBuffer;
+
 signals:
     void cropsChanged(float t, float b, float l, float r);
     void filtersChanged(QList<VideoWithCropWidget::FilterObject> filters);
 
 protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QWidget::resizeEvent(event);
+        triggerScale(); // Re-scale immediately on resize (fullscreen/window resize)
+    }
+
     // --- DELETE LOGIC ---
     void keyPressEvent(QKeyEvent* event) override {
         if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && adjustingFilter) {
@@ -117,70 +187,78 @@ protected:
         p.setRenderHint(QPainter::SmoothPixmapTransform, false);
         p.fillRect(rect(), m_backgroundColor);
 
-        if (lastFrame.isNull()) {
+        QImage frameToDraw;
+        {
+            QMutexLocker locker(&m_frameMutex);
+            frameToDraw = lastFrame;
+        }
+
+        if (frameToDraw.isNull()) {
+            // ... (title drawing logic remains same)
             QFont titleFont = p.font();
             titleFont.setPointSize(16);
             titleFont.setBold(true);
             p.setFont(titleFont);
-            p.setPen(QColor("#EAFBF6"));
+            p.setPen(m_accentColor.lighter(130));
             p.drawText(rect().adjusted(24, 0, -24, -18), Qt::AlignCenter, emptyStateTitle);
 
             QFont bodyFont = p.font();
             bodyFont.setPointSize(10);
             bodyFont.setBold(false);
             p.setFont(bodyFont);
-            p.setPen(QColor("#88A8A0"));
+            p.setPen(m_accentColor.darker(120));
             p.drawText(rect().adjusted(44, 48, -44, 26), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, emptyStateBody);
             return;
         }
 
         QRect tr = calculateTargetRect();
-        QImage processedFrame = lastFrame.copy();
+        const QRect imageRect = displayedFrameRect(tr, frameToDraw);
+        
+        if (!filterObjects.isEmpty()) {
+            QPainter ip(&frameToDraw);
+            for(const auto& obj : filterObjects) {
+                int x = obj.l * frameToDraw.width();
+                int y = obj.t * frameToDraw.height();
+                int w = (obj.r - obj.l) * frameToDraw.width();
+                int h = (obj.b - obj.t) * frameToDraw.height();
+                QRect area(x, y, w, h);
+                if (w <= 0 || h <= 0) continue;
 
-        QPainter ip(&processedFrame);
-        for(const auto& obj : filterObjects) {
-            int x = obj.l * processedFrame.width();
-            int y = obj.t * processedFrame.height();
-            int w = (obj.r - obj.l) * processedFrame.width();
-            int h = (obj.b - obj.t) * processedFrame.height();
-            QRect area(x, y, w, h);
-            if (w <= 0 || h <= 0) continue;
-
-            if (obj.mode == 0 || obj.mode == 1) {
-                QImage sub = lastFrame.copy(area);
-                int scale = (obj.mode == 0) ? 10 : 30;
-                QImage small = sub.scaled(qMax(1, w/scale), qMax(1, h/scale), Qt::IgnoreAspectRatio, Qt::FastTransformation);
-                QImage blurred = small.scaled(w, h, Qt::IgnoreAspectRatio, (obj.mode == 0 ? Qt::SmoothTransformation : Qt::FastTransformation));
-                ip.drawImage(x, y, blurred);
-            } else {
-                ip.fillRect(area, Qt::black);
+                if (obj.mode == 0 || obj.mode == 1) {
+                    QImage sub = frameToDraw.copy(area);
+                    int scale = (obj.mode == 0) ? 10 : 30;
+                    QImage small = sub.scaled(qMax(1, w/scale), qMax(1, h/scale), Qt::IgnoreAspectRatio, Qt::FastTransformation);
+                    QImage blurred = small.scaled(w, h, Qt::IgnoreAspectRatio, (obj.mode == 0 ? Qt::SmoothTransformation : Qt::FastTransformation));
+                    ip.drawImage(x, y, blurred);
+                } else {
+                    ip.fillRect(area, Qt::black);
+                }
             }
+            ip.end();
         }
-        ip.end();
 
-        QImage previewFrame = processedFrame.scaled(tr.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
-        p.drawImage(tr.topLeft(), previewFrame);
+        p.drawImage(imageRect.topLeft(), frameToDraw);
 
-        const int cropX = tr.x() + qRound(cropL * tr.width());
-        const int cropY = tr.y() + qRound(cropT * tr.height());
-        const int cropW = qRound((cropR - cropL) * tr.width());
-        const int cropH = qRound((cropB - cropT) * tr.height());
+        const int cropX = imageRect.x() + qRound(cropL * imageRect.width());
+        const int cropY = imageRect.y() + qRound(cropT * imageRect.height());
+        const int cropW = qRound((cropR - cropL) * imageRect.width());
+        const int cropH = qRound((cropB - cropT) * imageRect.height());
         const QRect cropRect(cropX, cropY, cropW, cropH);
 
         p.save();
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(0, 0, 0, 105));
-        p.drawRect(QRect(tr.left(), tr.top(), tr.width(), qMax(0, cropRect.top() - tr.top())));
-        p.drawRect(QRect(tr.left(), cropRect.bottom(), tr.width(), qMax(0, tr.bottom() - cropRect.bottom())));
-        p.drawRect(QRect(tr.left(), cropRect.top(), qMax(0, cropRect.left() - tr.left()), cropRect.height()));
-        p.drawRect(QRect(cropRect.right(), cropRect.top(), qMax(0, tr.right() - cropRect.right()), cropRect.height()));
+        p.drawRect(QRect(imageRect.left(), imageRect.top(), imageRect.width(), qMax(0, cropRect.top() - imageRect.top())));
+        p.drawRect(QRect(imageRect.left(), cropRect.bottom(), imageRect.width(), qMax(0, imageRect.bottom() - cropRect.bottom())));
+        p.drawRect(QRect(imageRect.left(), cropRect.top(), qMax(0, cropRect.left() - imageRect.left()), cropRect.height()));
+        p.drawRect(QRect(cropRect.right(), cropRect.top(), qMax(0, imageRect.right() - cropRect.right()), cropRect.height()));
         p.restore();
 
         for (int i = 0; i < filterObjects.size(); ++i) {
-            drawSelectionUI(p, tr, filterObjects[i].l, filterObjects[i].t, filterObjects[i].r, filterObjects[i].b, m_secondaryColor, (selectedFilterIdx == i && adjustingFilter));
+            drawSelectionUI(p, imageRect, filterObjects[i].l, filterObjects[i].t, filterObjects[i].r, filterObjects[i].b, m_secondaryColor, (selectedFilterIdx == i && adjustingFilter));
         }
 
-        drawSelectionUI(p, tr, cropL, cropT, cropR, cropB, m_accentColor, !adjustingFilter);
+        drawSelectionUI(p, imageRect, cropL, cropT, cropR, cropB, m_accentColor, !adjustingFilter);
     }
 
     void drawSelectionUI(QPainter &p, QRect tr, float L, float T, float R, float B, QColor color, bool isActive) {
@@ -212,7 +290,12 @@ protected:
         this->setFocus();
 
         if (lastFrame.isNull()) return;
-        QRect tr = calculateTargetRect();
+        QImage frame;
+        {
+            QMutexLocker locker(&m_frameMutex);
+            frame = lastFrame;
+        }
+        QRect tr = displayedFrameRect(calculateTargetRect(), frame);
         QPoint p = e->pos();
         int margin = 20;
 
@@ -257,9 +340,14 @@ protected:
 
     void mouseMoveEvent(QMouseEvent* e) override {
         if (activeEdge == None || lastFrame.isNull()) return;
-        QRect tr = calculateTargetRect();
-        float curX = qBound(0.0f, static_cast<float>(e->pos().x() - tr.x()) / tr.width(), 1.0f);
-        float curY = qBound(0.0f, static_cast<float>(e->pos().y() - tr.y()) / tr.height(), 1.0f);
+        QImage frame;
+        {
+            QMutexLocker locker(&m_frameMutex);
+            frame = lastFrame;
+        }
+        QRect tr = displayedFrameRect(calculateTargetRect(), frame);
+        float curX = qBound(0.0f, static_cast<float>(e->pos().x() - tr.x()) / qMax(1, tr.width()), 1.0f);
+        float curY = qBound(0.0f, static_cast<float>(e->pos().y() - tr.y()) / qMax(1, tr.height()), 1.0f);
 
         float &L = adjustingFilter ? filterObjects[selectedFilterIdx].l : cropL;
         float &R = adjustingFilter ? filterObjects[selectedFilterIdx].r : cropR;

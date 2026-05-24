@@ -17,6 +17,7 @@ void TimelineWidget::keyPressEvent(QKeyEvent *event) {
 
     if (matchesShortcut(event, editorSettings.keyReplay) || event->key() == Qt::Key_0) {
         currentPosMs = qMax<qint64>(0LL, currentPosMs - settings.majorSeekMs);
+        emitVisualStateForCurrentContext();
         emit playheadMoved(currentPosMs);
         showNotification("⏪ REPLAY");
         update();
@@ -25,6 +26,7 @@ void TimelineWidget::keyPressEvent(QKeyEvent *event) {
 
     if (matchesShortcut(event, editorSettings.keyForward)) {
         currentPosMs = qMin(durationMs, currentPosMs + settings.majorSeekMs);
+        emitVisualStateForCurrentContext();
         emit playheadMoved(currentPosMs);
         update();
         return;
@@ -32,12 +34,14 @@ void TimelineWidget::keyPressEvent(QKeyEvent *event) {
 
     if (matchesShortcut(event, editorSettings.keyStepBack)) {
         currentPosMs = qMax<qint64>(0LL, currentPosMs - settings.minorSeekMs);
+        emitVisualStateForCurrentContext();
         emit playheadMoved(currentPosMs);
         update();
         return;
     }
     else if (matchesShortcut(event, editorSettings.keyStepForward)) {
         currentPosMs = qMin(durationMs, currentPosMs + settings.minorSeekMs);
+        emitVisualStateForCurrentContext();
         emit playheadMoved(currentPosMs);
         update();
         return;

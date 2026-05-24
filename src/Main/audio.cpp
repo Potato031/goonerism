@@ -20,10 +20,11 @@ void TimelineWidget::loadAudioFast(const QString &inputPath) {
         audioSamples.clear();
         maxAmplitude = 0.01f;
         update();
+        emit mediaProbingFinished();
         return;
     }
 
-    QString tempAudioPath = QDir::tempPath() + "/waveform_data.raw";
+    QString tempAudioPath = QDir::tempPath() + QString("/potato_wave_%1.raw").arg(qAbs(qHash(inputPath)));
     auto *ffmpeg = new QProcess(this);
     QStringList args;
     args << "-y" << "-i" << inputPath
@@ -55,6 +56,7 @@ void TimelineWidget::loadAudioFast(const QString &inputPath) {
             maxAmplitude = localMax;
         }
         update();
+        emit mediaProbingFinished();
         ffmpeg->deleteLater();
     });
 
@@ -162,35 +164,65 @@ void TimelineWidget::autoCutSilence() {
     ffmpeg->start(getFFToolPath("ffmpeg"), args);
 }
 void TimelineWidget::detectAudioTracks(const QString &path) {
-    auto runProbe = [&](const QStringList &args) {
-        QProcess probe;
-        probe.start(getFFToolPath("ffprobe"), args);
-        probe.waitForFinished();
-        return probe.readAllStandardOutput().trimmed();
-    };
+    auto *probe = new QProcess(this);
+    QStringList args;
+    args << "-v" << "error" << "-show_entries" << "stream=codec_type,index" << "-of" << "csv=p=0" << path;
 
-    const QString audioOutput = runProbe({
-        "-v", "error",
-        "-select_streams", "a",
-        "-show_entries", "stream=index",
-        "-of", "csv=p=0",
-        path
+    connect(probe, &QProcess::finished, this, [this, probe, path](int exitCode) {
+        if (exitCode != 0) {
+            showNotification("TRACK DETECTION FAILED ❌");
+            hasAudioStream = false;
+            hasVideoStream = false;
+            probe->deleteLater();
+            emit mediaProbingFinished();
+            return;
+        }
+
+        QString output = probe->readAllStandardOutput().trimmed();
+        QStringList lines = output.split(QRegularExpression("[\r\n]+"), Qt::SkipEmptyParts);
+        
+        int audioCount = 0;
+        bool hasVideo = false;
+        for (const QString &line : lines) {
+            const QStringList fields = line.toLower().split(',', Qt::SkipEmptyParts);
+            for (QString field : fields) {
+                field = field.trimmed();
+                if (field == "audio") {
+                    audioCount++;
+                    break;
+                }
+                if (field == "video") {
+                    hasVideo = true;
+                    break;
+                }
+            }
+        }
+
+        totalAudioTracks = qMax(1, audioCount);
+        hasAudioStream = audioCount > 0;
+        hasVideoStream = hasVideo;
+        
+        // Safety: If currentAudioTrack is out of bounds for the new file, reset it
+        if (currentAudioTrack >= totalAudioTracks) {
+            currentAudioTrack = 0;
+        }
+
+        if (hasAudioStream) {
+            loadAudioFast(path);
+        } else {
+            audioSamples.clear();
+            update();
+            emit mediaProbingFinished();
+        }
+        
+        if (!hasAudioStream && !hasVideo) {
+             showNotification("NO MEDIA STREAMS FOUND ⚠️");
+        }
+
+        probe->deleteLater();
     });
 
-    const QString videoOutput = runProbe({
-        "-v", "error",
-        "-select_streams", "v",
-        "-show_entries", "stream=index",
-        "-of", "csv=p=0",
-        path
-    });
-
-    totalAudioTracks = audioOutput.split('\n', Qt::SkipEmptyParts).count();
-    hasAudioStream = totalAudioTracks > 0;
-    hasVideoStream = !videoOutput.split('\n', Qt::SkipEmptyParts).isEmpty();
-
-    if (!hasAudioStream) totalAudioTracks = 1;
-    currentAudioTrack = 0;
+    probe->start(getFFToolPath("ffprobe"), args);
 }
 
 bool TimelineWidget::isAnySelectedMuted() {

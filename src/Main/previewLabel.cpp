@@ -6,13 +6,15 @@
 #include <QQueue>
 #include <QTimer>
 #include <QCoreApplication>
+#include <QMap>
 #include <functional>
 #include "../Includes/mediautils.h"
 
-// Redefining the helper here so PreviewLabel knows where to find FFmpeg on Windows
+// Static cache to store whether a preview is being generated or has failed
+static QMap<QString, bool> g_generationCache;
+
 static QString getFFmpegPath() {
 #ifdef Q_OS_WIN
-    // Looks for ffmpeg.exe in the same folder as your app's .exe
     return QCoreApplication::applicationDirPath() + "/ffmpeg.exe";
 #else
     return "ffmpeg";
@@ -39,7 +41,7 @@ void enqueuePreviewJob(std::function<void()> job) {
 
 void finishPreviewJob() {
     g_previewJobRunning = false;
-    QTimer::singleShot(0, []() {
+    QTimer::singleShot(10, []() {
         startNextPreviewJob();
     });
 }
@@ -48,7 +50,7 @@ PreviewLabel::PreviewLabel(const QString &videoPath, QWidget *parent)
     : QLabel(parent), path(videoPath) {
 
     isAudioFile = MediaUtils::isKnownAudioFile(path);
-    setStyleSheet("background-color: #091114; border-radius: 8px; border: 1px solid #1f3139;");
+    // Move styling to QSS or standardized here
     setMouseTracking(true);
     setAlignment(Qt::AlignCenter);
 
@@ -61,7 +63,6 @@ void PreviewLabel::generatePreview() {
         return;
     }
 
-    // Using QFileInfo to ensure we have a clean filename for the cache
     QString outPath = QDir::tempPath() + "/potato_cache_" + QFileInfo(path).baseName() + ".jpg";
 
     if (QFile::exists(outPath)) {
@@ -71,7 +72,16 @@ void PreviewLabel::generatePreview() {
         }
     }
 
-    QTimer::singleShot(250, this, [self = QPointer<PreviewLabel>(this), outPath]() {
+    // If already generating, don't enqueue again
+    if (g_generationCache.value(path, false)) {
+        renderLoadingPlaceholder();
+        return;
+    }
+
+    renderLoadingPlaceholder();
+    g_generationCache[path] = true;
+
+    QTimer::singleShot(100, this, [self = QPointer<PreviewLabel>(this), outPath]() {
         enqueuePreviewJob([self, outPath]() {
             if (!self) {
                 finishPreviewJob();
@@ -85,8 +95,13 @@ void PreviewLabel::generatePreview() {
 
             QProcess *ffmpeg = new QProcess(self);
             QObject::connect(ffmpeg, &QProcess::finished, self, [self, outPath, ffmpeg]() {
-                if (self && self->filmstrip.load(outPath)) {
-                    self->updatePreview(0);
+                if (self) {
+                    if (self->filmstrip.load(outPath)) {
+                        self->updatePreview(0);
+                    } else {
+                        self->renderErrorPlaceholder();
+                    }
+                    g_generationCache[self->path] = false;
                 }
                 ffmpeg->deleteLater();
                 finishPreviewJob();
@@ -109,8 +124,22 @@ void PreviewLabel::updatePreview(int index) {
     int xOffset = index * frameWidth;
 
     QPixmap frame = filmstrip.copy(xOffset, 0, frameWidth, filmstrip.height());
-
     setPixmap(frame.scaled(this->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
+}
+
+void PreviewLabel::renderLoadingPlaceholder() {
+    QPixmap pixmap(size().isValid() ? size() : QSize(160, 90));
+    pixmap.fill(QColor("#0a0c10"));
+    setPixmap(pixmap);
+}
+
+void PreviewLabel::renderErrorPlaceholder() {
+    QPixmap pixmap(size().isValid() ? size() : QSize(160, 90));
+    pixmap.fill(QColor("#1a0c0c"));
+    QPainter painter(&pixmap);
+    painter.setPen(Qt::red);
+    painter.drawText(pixmap.rect(), Qt::AlignCenter, "ERROR");
+    setPixmap(pixmap);
 }
 
 void PreviewLabel::renderAudioPlaceholder() {

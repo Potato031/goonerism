@@ -52,6 +52,16 @@ inline bool isKnownAudioFile(const QString &filePath) {
     return hasKnownExtension(filePath, knownAudioExtensions());
 }
 
+inline bool isKnownVideoFile(const QString &filePath) {
+    if (filePath.isEmpty()) return false;
+
+    QMimeDatabase db;
+    const QString mimeName = db.mimeTypeForFile(filePath).name();
+    if (mimeName.startsWith("video/")) return true;
+
+    return hasKnownExtension(filePath, knownVideoExtensions());
+}
+
 inline QString importDialogFilter() {
     return "Media files (*.mp4 *.m4v *.mov *.mkv *.avi *.webm *.wmv *.flv *.mpeg *.mpg *.ts *.m2ts *.mts *.3gp *.ogv "
            "*.mp3 *.wav *.flac *.aac *.m4a *.ogg *.opus *.wma *.aiff *.aif *.alac *.mka *.ac3 *.amr *.ape *.caf *.mid *.midi *.mp2);;"

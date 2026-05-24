@@ -23,6 +23,8 @@ private:
     void generatePreview();
     void updatePreview(int index);
     void renderAudioPlaceholder();
+    void renderLoadingPlaceholder();
+    void renderErrorPlaceholder();
 
     QString path;
     QPixmap filmstrip;

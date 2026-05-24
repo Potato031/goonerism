@@ -3,6 +3,18 @@
 #include <QStyle>
 #include <QFile>
 #include <QVideoFrame>
+#include <QTimer>
+
+namespace {
+QString formatTimelineDuration(qint64 ms) {
+    ms = qMax<qint64>(0, ms);
+    if (ms >= 60000) {
+        const qint64 totalSeconds = ms / 1000;
+        return QString("%1:%2").arg(totalSeconds / 60).arg(totalSeconds % 60, 2, 10, QLatin1Char('0'));
+    }
+    return QString("%1.%2s").arg(ms / 1000).arg(ms % 1000, 3, 10, QLatin1Char('0'));
+}
+}
 
 TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent) {
     setMinimumHeight(180);
@@ -28,16 +40,32 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent) {
     connect(videoSink, &QVideoSink::videoFrameChanged, this, &TimelineWidget::processVideoFrame);
 }
 
+void TimelineWidget::setCurrentPosition(qint64 ms) {
+    const int oldSegment = segmentIndexAtTime(currentPosMs);
+    currentPosMs = ms;
+    const int newSegment = segmentIndexAtTime(currentPosMs);
+    if (newSegment >= 0 && oldSegment != newSegment) {
+        selectedSegmentIdx = newSegment;
+        selectedSegmentIndices.clear();
+        emitVisualStateForCurrentContext();
+    }
+    update();
+}
+
 void TimelineWidget::splitAtPlayhead() {
     const int splitGuard = playbackSettings.splitGuardMs;
     for (int i = 0; i < segments.size(); ++i) {
         if (currentPosMs > segments[i].startMs + splitGuard && currentPosMs < segments[i].endMs - splitGuard) {
-            qint64 originalEnd = segments[i].endMs;
+            Segment splitSegment = segments[i];
+            qint64 originalEnd = splitSegment.endMs;
             segments[i].endMs = currentPosMs;
-            segments.insert(i + 1, { currentPosMs, originalEnd });
+            splitSegment.startMs = currentPosMs;
+            splitSegment.endMs = originalEnd;
+            segments.insert(i + 1, splitSegment);
             selectedSegmentIdx = i + 1;
             showNotification("CLIP SPLIT ✂️");
             emit clipTrimmed();
+            emitVisualStateForCurrentContext();
             update();
             return;
         }
@@ -81,6 +109,7 @@ void TimelineWidget::validatePlayheadPosition() {
         } else {
             currentPosMs = segments.first().startMs;
         }
+        emitVisualStateForCurrentContext();
         emit playheadMoved(currentPosMs);
     }
 }
@@ -113,8 +142,6 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
 
     double pxPerMs = static_cast<double>(contentWidth) / durationMs;
 
-    // Draw Clips
-    // ... inside paintEvent, replacing the Clip Drawing loop ...
     for (int i = 0; i < segments.size(); ++i) {
         QRectF clipRect(segments[i].startMs * pxPerMs, vTop, (segments[i].endMs - segments[i].startMs) * pxPerMs, trackHeight);
         bool isSel = (i == selectedSegmentIdx) || selectedSegmentIndices.contains(i);
@@ -128,6 +155,41 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
         }
 
         painter.drawRoundedRect(clipRect, 5, 5);
+
+        if (!thumbnailCache.isEmpty()) {
+            painter.save();
+            painter.setClipRect(clipRect.adjusted(2, 2, -2, -2));
+            painter.setOpacity(isSel ? 0.62 : 0.42);
+            const int thumbW = 88;
+            for (int x = static_cast<int>(clipRect.left()) + 4; x < clipRect.right(); x += thumbW) {
+                const qint64 timeAtX = qBound<qint64>(segments[i].startMs,
+                    static_cast<qint64>(x / pxPerMs), segments[i].endMs);
+                const int sec = static_cast<int>(timeAtX / 1000);
+                if (!thumbnailCache.contains(sec)) continue;
+                QRect target(x, static_cast<int>(clipRect.top()) + 3, thumbW - 4, trackHeight - 6);
+                painter.drawImage(target, thumbnailCache.value(sec));
+            }
+            painter.restore();
+        }
+
+        if (segments[i].cropTop > 0.001f || segments[i].cropBottom < 0.999f ||
+            segments[i].cropLeft > 0.001f || segments[i].cropRight < 0.999f ||
+            !segments[i].filters.isEmpty()) {
+            painter.save();
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(segments[i].filters.isEmpty()
+                                 ? QColor(255, 135, 95, 85)
+                                 : QColor(255, 107, 74, 115));
+            painter.drawRoundedRect(QRectF(clipRect.left() + 6, clipRect.top() + 6, 34, 14), 3, 3);
+            QFont fxFont = painter.font();
+            fxFont.setPointSizeF(7);
+            fxFont.setBold(true);
+            painter.setFont(fxFont);
+            painter.setPen(Qt::white);
+            painter.drawText(QRectF(clipRect.left() + 6, clipRect.top() + 5, 34, 15), Qt::AlignCenter,
+                             segments[i].filters.isEmpty() ? "CROP" : "FX");
+            painter.restore();
+        }
 
         // Draw Gain Label (Visual Feedback)
         if (segments[i].gain != 1.0f) {
@@ -148,10 +210,21 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
             int startIdx = (segments[i].startMs * audioSamples.size()) / durationMs;
             int endIdx = (segments[i].endMs * audioSamples.size()) / durationMs;
 
-            for (int s = startIdx; s < endIdx && s < (int)audioSamples.size(); s++) {
+            // PERFORMANCE OPTIMIZATION: Only draw one line per pixel to save CPU/GPU cycles
+            // especially important on 4K displays where the timeline can be very wide.
+            double samplesPerPixel = (double)audioSamples.size() / contentWidth;
+            int step = qMax(1, (int)samplesPerPixel);
+
+            for (int s = startIdx; s < endIdx && s < (int)audioSamples.size(); s += step) {
                 int x = (s * (double)contentWidth) / audioSamples.size();
-                // USE SEGMENT GAIN HERE
-                float norm = (audioSamples[s] / maxAmplitude) * segments[i].gain;
+                
+                // Find max in this pixel range for a better visual representation
+                float maxInStep = 0.0f;
+                for (int j = 0; j < step && (s + j) < endIdx && (s + j) < (int)audioSamples.size(); ++j) {
+                    maxInStep = qMax(maxInStep, audioSamples[s + j]);
+                }
+
+                float norm = (maxInStep / maxAmplitude) * segments[i].gain;
                 int h = qMin((float)trackHeight, norm * (trackHeight - 10));
                 painter.drawLine(x, aTop + (trackHeight/2) - h/2, x, aTop + (trackHeight/2) + h/2);
             }
@@ -177,7 +250,13 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
     if (originalFileSize > 0) {
         double totalSec = getTotalSegmentsDuration();
         double originalSec = durationMs / 1000.0;
-        double estBytes = (double)originalFileSize * (totalSec / originalSec) * ((cropRight - cropLeft) * (cropBottom - cropTop));
+        double weightedSpatialRatio = 0.0;
+        for (const auto &seg : segments) {
+            const double segDuration = qMax<qint64>(1, seg.endMs - seg.startMs);
+            weightedSpatialRatio += segDuration * ((seg.cropRight - seg.cropLeft) * (seg.cropBottom - seg.cropTop));
+        }
+        const double spatialRatio = totalSec > 0.0 ? weightedSpatialRatio / (totalSec * 1000.0) : 1.0;
+        double estBytes = (double)originalFileSize * (totalSec / originalSec) * spatialRatio;
 
         QString sizeStr;
         double displaySize = estBytes;
@@ -195,8 +274,17 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
         double mb = estBytes / (1024.0 * 1024.0);
         QColor sizeColor = (mb <= 25.0) ? QColor("#00C853") : (mb <= 100.0) ? accent : secondary;
 
+        const QString durationStr = QString("TOTAL: %1").arg(formatTimelineDuration(static_cast<qint64>(totalSec * 1000.0)));
+        int durationBadgeW = painter.fontMetrics().horizontalAdvance(durationStr) + 30;
+        QRect durationRect(width() - durationBadgeW - 15, 15, durationBadgeW, 28);
+        painter.setBrush(QColor(0, 0, 0, 200));
+        painter.setPen(QPen(accent, 1.5));
+        painter.drawRoundedRect(durationRect, 6, 6);
+        painter.setPen(Qt::white);
+        painter.drawText(durationRect, Qt::AlignCenter, durationStr);
+
         int sizeBadgeW = painter.fontMetrics().horizontalAdvance(sizeStr) + 30;
-        QRect sizeRect(width() - sizeBadgeW - 15, 15, sizeBadgeW, 28);
+        QRect sizeRect(durationRect.left() - sizeBadgeW - 10, 15, sizeBadgeW, 28);
         painter.setBrush(QColor(0, 0, 0, 200));
         painter.setPen(QPen(sizeColor, 1.5));
         painter.drawRoundedRect(sizeRect, 6, 6);
@@ -210,6 +298,128 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
         painter.drawRoundedRect(trackRect, 6, 6);
         painter.setPen(Qt::white);
         painter.drawText(trackRect, Qt::AlignCenter, activeName.toUpper());
+    }
+}
+
+void TimelineWidget::updateCropValues(float t, float b, float l, float r) {
+    cropTop = t;
+    cropBottom = b;
+    cropLeft = l;
+    cropRight = r;
+    for (int idx : targetVisualSegments()) {
+        if (idx >= 0 && idx < segments.size()) {
+            segments[idx].cropTop = cropTop;
+            segments[idx].cropBottom = cropBottom;
+            segments[idx].cropLeft = cropLeft;
+            segments[idx].cropRight = cropRight;
+        }
+    }
+    update();
+}
+
+void TimelineWidget::setCurrentFilters(const QList<VideoWithCropWidget::FilterObject> &filters) {
+    currentFilters = filters;
+    for (int idx : targetVisualSegments()) {
+        if (idx >= 0 && idx < segments.size()) {
+            segments[idx].filters = currentFilters;
+        }
+    }
+    update();
+}
+
+int TimelineWidget::segmentIndexAtTime(qint64 timeMs) const {
+    for (int i = 0; i < segments.size(); ++i) {
+        if (timeMs >= segments[i].startMs && timeMs <= segments[i].endMs) return i;
+    }
+    return -1;
+}
+
+int TimelineWidget::activeVisualSegmentIndex() const {
+    if (selectedSegmentIdx >= 0 && selectedSegmentIdx < segments.size()) return selectedSegmentIdx;
+    if (!selectedSegmentIndices.isEmpty()) return *selectedSegmentIndices.constBegin();
+    return segmentIndexAtTime(currentPosMs);
+}
+
+QSet<int> TimelineWidget::targetVisualSegments() const {
+    QSet<int> targets = selectedSegmentIndices;
+    if (selectedSegmentIdx >= 0 && selectedSegmentIdx < segments.size()) targets.insert(selectedSegmentIdx);
+    if (targets.isEmpty()) {
+        const int activeIdx = segmentIndexAtTime(currentPosMs);
+        if (activeIdx >= 0) targets.insert(activeIdx);
+    }
+    return targets;
+}
+
+void TimelineWidget::applyCurrentVisualsToSelection(bool allSegments) {
+    saveState();
+    QSet<int> targets;
+    if (allSegments) {
+        for (int i = 0; i < segments.size(); ++i) targets.insert(i);
+    } else {
+        targets = targetVisualSegments();
+    }
+
+    for (int idx : targets) {
+        if (idx < 0 || idx >= segments.size()) continue;
+        segments[idx].cropTop = cropTop;
+        segments[idx].cropBottom = cropBottom;
+        segments[idx].cropLeft = cropLeft;
+        segments[idx].cropRight = cropRight;
+        segments[idx].filters = currentFilters;
+    }
+
+    showNotification(allSegments ? "VISUALS APPLIED TO ALL CLIPS" : "VISUALS APPLIED TO CLIP");
+    emit clipTrimmed();
+    update();
+}
+
+void TimelineWidget::clearVisualsForSelection(bool allSegments) {
+    saveState();
+    QSet<int> targets;
+    if (allSegments) {
+        for (int i = 0; i < segments.size(); ++i) targets.insert(i);
+    } else {
+        targets = targetVisualSegments();
+    }
+
+    for (int idx : targets) {
+        if (idx < 0 || idx >= segments.size()) continue;
+        segments[idx].cropTop = 0.0f;
+        segments[idx].cropBottom = 1.0f;
+        segments[idx].cropLeft = 0.0f;
+        segments[idx].cropRight = 1.0f;
+        segments[idx].filters.clear();
+    }
+
+    emitVisualStateForCurrentContext();
+    showNotification(allSegments ? "CLEARED ALL VISUALS" : "CLEARED CLIP VISUALS");
+    emit clipTrimmed();
+    update();
+}
+
+bool TimelineWidget::visualStateForCurrentContext(float &t, float &b, float &l, float &r,
+                                                  QList<VideoWithCropWidget::FilterObject> &filters) const {
+    const int idx = activeVisualSegmentIndex();
+    if (idx < 0 || idx >= segments.size()) return false;
+    const auto &seg = segments[idx];
+    t = seg.cropTop;
+    b = seg.cropBottom;
+    l = seg.cropLeft;
+    r = seg.cropRight;
+    filters = seg.filters;
+    return true;
+}
+
+void TimelineWidget::emitVisualStateForCurrentContext() {
+    float t, b, l, r;
+    QList<VideoWithCropWidget::FilterObject> filters;
+    if (visualStateForCurrentContext(t, b, l, r, filters)) {
+        cropTop = t;
+        cropBottom = b;
+        cropLeft = l;
+        cropRight = r;
+        currentFilters = filters;
+        emit visualStateChanged(t, b, l, r, filters);
     }
 }
 
