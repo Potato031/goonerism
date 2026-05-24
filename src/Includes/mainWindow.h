@@ -106,7 +106,7 @@ public:
 
     MainWindow(QWidget *parent = nullptr);
     EditorSettings getEditorSettings() const { return editorSettings; }
-    const QString CURRENT_VERSION = "v1.1.2";
+    const QString CURRENT_VERSION = "1.1.4";
     void downloadUpdate(const QString &url);
     void finalizeUpdate();
     void checkForUpdates();
