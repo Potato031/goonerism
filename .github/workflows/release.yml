@@ -85,7 +85,7 @@ jobs:
           echo "Categories=Development;" >> PotatoEditor.desktop
           
           export LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
-          export LDAI_OUTPUT="PotatoEditor_linux.AppImage"
+          export LDAI_OUTPUT="potatoeditor.AppImage"
           
           ./linuxdeploy-x86_64.AppImage --appdir AppDir \
             -e AppDir/PotatoEditor \
@@ -97,6 +97,6 @@ jobs:
       - name: Upload Linux Release
         uses: softprops/action-gh-release@v1
         with:
-          files: PotatoEditor_linux.AppImage
+          files: potatoeditor.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
