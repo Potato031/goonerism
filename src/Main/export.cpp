@@ -9,6 +9,7 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QTime>
+#include <functional>
 
 #include "../Includes/timelinewidget.h"
 #include "../Includes/mediaSource.h"
@@ -37,59 +38,167 @@ static QString getExportDir() {
     return path;
 }
 
-static QString buildFilterChain(const QString &inputLabel,
-                                const QString &outputLabel,
-                                const QString &prefix,
-                                int vidW,
-                                int vidH,
-                                const QList<VideoWithCropWidget::FilterObject>& filterList) {
-    if (filterList.isEmpty()) return QString("%1null%2;").arg(inputLabel, outputLabel);
+static QString escapeDrawtext(QString text) {
+    text.replace('\\', "\\\\");
+    // A typographic apostrophe avoids the ffmpeg quote-escaping maze entirely.
+    text.replace('\'', QString::fromUtf8("’"));
+    text.replace(':', "\\:");
+    text.replace('%', "\\%");
+    return text;
+}
 
+// Builds the effect chain for one timeline segment. Every overlay clip that
+// intersects the segment is applied with enable='between(t,a,b)' so it only
+// shows for its own time range (t is segment-local after trim+setpts).
+static QString buildOverlayChain(const QString &inputLabel,
+                                 const QString &outputLabel,
+                                 const QString &prefix,
+                                 int vidW,
+                                 int vidH,
+                                 qint64 segStartMs,
+                                 qint64 segEndMs,
+                                 const QList<TimelineWidget::OverlayClip> &overlays) {
     QString chain;
     QString lastOutput = inputLabel;
+    int step = 0;
 
-    for (int i = 0; i < filterList.size(); ++i) {
-        const auto& obj = filterList[i];
+    for (const auto &ov : overlays) {
+        const qint64 isectStart = qMax(ov.startMs, segStartMs);
+        const qint64 isectEnd = qMin(ov.endMs, segEndMs);
+        if (isectEnd <= isectStart) continue;
 
-        // IMPORTANT: Windows FFmpeg yuv420p requires even numbers.
-        // & ~1 zero-fills the last bit, forcing the number to be even.
-        int absX = qRound(vidW * obj.l) & ~1;
-        int absY = qRound(vidH * obj.t) & ~1;
-        int absW = qRound(vidW * (obj.r - obj.l)) & ~1;
-        int absH = qRound(vidH * (obj.b - obj.t)) & ~1;
+        const double a = (isectStart - segStartMs) / 1000.0;
+        const double b = (isectEnd - segStartMs) / 1000.0;
+        const QString enable = QString("enable='between(t,%1,%2)'")
+                                   .arg(a, 0, 'f', 3).arg(b, 0, 'f', 3);
 
-        if (absW <= 0 || absH <= 0) continue;
+        // Even numbers required for yuv420p subsampling.
+        const int absX = qRound(vidW * ov.l) & ~1;
+        const int absY = qRound(vidH * ov.t) & ~1;
+        const int absW = qRound(vidW * (ov.r - ov.l)) & ~1;
+        const int absH = qRound(vidH * (ov.b - ov.t)) & ~1;
+        if (ov.type != 3 && (absW <= 0 || absH <= 0)) continue;
 
-        QString currentStepLabel = QString("[%1_step%2]").arg(prefix).arg(i);
-        QString baseLabel = QString("[%1_base%2]").arg(prefix).arg(i);
-        QString maskLabel = QString("[%1_mask%2]").arg(prefix).arg(i);
+        const QString cur = QString("[%1_s%2]").arg(prefix).arg(step);
 
-        if (obj.mode == 0) { // Blur
-            QString blurLabel = QString("[%1_blur%2]").arg(prefix).arg(i);
-            chain += QString("%1split=2%2%3;%3crop=%4:%5:%6:%7,boxblur=20%8;%2%8overlay=%6:%7%9;")
-                         .arg(lastOutput, baseLabel, maskLabel)
-                         .arg(absW).arg(absH).arg(absX).arg(absY)
-                         .arg(blurLabel, currentStepLabel);
-        } else if (obj.mode == 1) { // Pixelate
-            QString pixelLabel = QString("[%1_px%2]").arg(prefix).arg(i);
-            chain += QString("%1split=2%2%3;%3crop=%4:%5:%6:%7,scale=iw/30:-1,scale=%4:%5:flags=neighbor%8;%2%8overlay=%6:%7%9;")
-                         .arg(lastOutput, baseLabel, maskLabel)
-                         .arg(absW).arg(absH).arg(absX).arg(absY)
-                         .arg(pixelLabel, currentStepLabel);
-        } else { // Blackout
-            chain += QString("%1drawbox=x=%2:y=%3:w=%4:h=%5:color=black:t=fill%6;")
-                         .arg(lastOutput).arg(absX).arg(absY).arg(absW).arg(absH).arg(currentStepLabel);
+        if (ov.type == 0 || ov.type == 1) {
+            const QString base = QString("[%1_b%2]").arg(prefix).arg(step);
+            const QString mask = QString("[%1_m%2]").arg(prefix).arg(step);
+            const QString fx = QString("[%1_f%2]").arg(prefix).arg(step);
+            const QString effect = ov.type == 0
+                ? QString("boxblur=20")
+                : QString("scale=iw/30:-1,scale=%1:%2:flags=neighbor").arg(absW).arg(absH);
+            chain += lastOutput + "split=2" + base + mask + ";"
+                   + mask + QString("crop=%1:%2:%3:%4,").arg(absW).arg(absH).arg(absX).arg(absY) + effect + fx + ";"
+                   + base + fx + QString("overlay=%1:%2:").arg(absX).arg(absY) + enable + cur + ";";
+        } else if (ov.type == 2) {
+            chain += lastOutput
+                   + QString("drawbox=x=%1:y=%2:w=%3:h=%4:color=black:t=fill:").arg(absX).arg(absY).arg(absW).arg(absH)
+                   + enable + cur + ";";
+        } else { // text
+            const int fontSize = qMax(14, qRound(vidH * (ov.b - ov.t) * 0.6));
+            const double cx = (ov.l + ov.r) / 2.0;
+            const double cy = (ov.t + ov.b) / 2.0;
+            QString dt = QString("drawtext=text='%1':fontsize=%2:fontcolor=white:borderw=%3:bordercolor=black@0.65:"
+                                 "x=%4*w-text_w/2:y=%5*h-text_h/2:")
+                             .arg(escapeDrawtext(ov.text))
+                             .arg(fontSize)
+                             .arg(qMax(1, fontSize / 18))
+                             .arg(cx, 0, 'f', 4)
+                             .arg(cy, 0, 'f', 4);
+#ifdef Q_OS_WIN
+            dt += "fontfile='C\\:/Windows/Fonts/arial.ttf':";
+#endif
+            chain += lastOutput + dt + enable + cur + ";";
         }
-        lastOutput = currentStepLabel;
+        lastOutput = cur;
+        ++step;
     }
 
-    chain += QString("%1copy%2;").arg(lastOutput, outputLabel);
+    if (step == 0) return QString("%1null%2;").arg(inputLabel, outputLabel);
+    chain += lastOutput + "copy" + outputLabel + ";";
     return chain;
 }
 
 static QString cropScaleFilter(float cropRight, float cropLeft, float cropBottom, float cropTop, int vidW, int vidH) {
-    return QString("crop=trunc(iw*(%1-%2)/2)*2:trunc(ih*(%3-%4)/2)*2:trunc(iw*%2/2)*2:trunc(ih*%4/2)*2,scale=%5:%6,setsar=1")
+    return QString("crop=trunc(iw*(%1-%2)/2)*2:trunc(ih*(%3-%4)/2)*2:trunc(iw*%2/2)*2:trunc(ih*%4/2)*2,scale=%5:%6,setsar=1,format=yuv420p")
         .arg(cropRight).arg(cropLeft).arg(cropBottom).arg(cropTop).arg(vidW).arg(vidH);
+}
+
+namespace {
+struct ExportGeometry {
+    int vidW = 1920;
+    int vidH = 1080;
+};
+
+ExportGeometry resolveExportGeometry(const QWidget *timelineWidget) {
+    ExportGeometry geo;
+    const QWidget *topWindow = timelineWidget->window();
+    if (const QObject *videoContainer = topWindow->findChild<QObject*>("VideoContainer")) {
+        auto *vwc = videoContainer->findChild<VideoWithCropWidget*>();
+        if (vwc) {
+            const QVariant vW = vwc->property("actualWidth");
+            const QVariant vH = vwc->property("actualHeight");
+            if (vW.isValid() && vW.toInt() > 0) geo.vidW = vW.toInt();
+            if (vH.isValid() && vH.toInt() > 0) geo.vidH = vH.toInt();
+        }
+    }
+    return geo;
+}
+}
+
+// Builds the video (and optionally audio) filter graph for all segments across
+// all timeline sources, ending in [outv] / [outa].
+QString buildSegmentsGraph(const QList<TimelineWidget::Segment> &segments,
+                           const QList<TimelineWidget::SourceClip> &sources,
+                           const QList<TimelineWidget::OverlayClip> &overlays,
+                           int vidW, int vidH,
+                           bool withAudio,
+                           bool primaryHasAudio,
+                           int primaryAudioTrack,
+                           double seekStart,
+                           const QString &prefix) {
+    QString filter;
+    for (int i = 0; i < segments.size(); ++i) {
+        const auto &seg = segments[i];
+        const int srcIdx = qBound(0, seg.sourceIdx, static_cast<int>(sources.size()) - 1);
+        const auto &src = sources[srcIdx];
+        const double sLocal = qMax(0.0, (seg.startMs - src.offsetMs) / 1000.0 - (srcIdx == 0 ? seekStart : 0.0));
+        const double d = (seg.endMs - seg.startMs) / 1000.0;
+
+        filter += QString("[%1:v]trim=start=%2:duration=%3,setpts=PTS-STARTPTS[%4_seg%5];")
+                      .arg(srcIdx).arg(sLocal).arg(d).arg(prefix).arg(i);
+        filter += buildOverlayChain(QString("[%1_seg%2]").arg(prefix).arg(i),
+                                    QString("[%1_v%2]").arg(prefix).arg(i),
+                                    QString("%1%2").arg(prefix).arg(i),
+                                    vidW, vidH,
+                                    seg.startMs, seg.endMs,
+                                    overlays);
+        filter += QString("[%1_v%2]%3[%1_vx%2];")
+                      .arg(prefix).arg(i)
+                      .arg(cropScaleFilter(seg.cropRight, seg.cropLeft, seg.cropBottom, seg.cropTop, vidW, vidH));
+
+        if (withAudio) {
+            const bool segHasAudio = (srcIdx == 0) ? primaryHasAudio : src.hasAudio;
+            if (segHasAudio) {
+                const int track = (srcIdx == 0) ? primaryAudioTrack : 0;
+                filter += QString("[%1:a:%2]atrim=start=%3:duration=%4,asetpts=PTS-STARTPTS,volume=%5,"
+                                  "aresample=async=1,aformat=sample_rates=48000:channel_layouts=stereo[%6_a%7];")
+                              .arg(srcIdx).arg(track).arg(sLocal).arg(d).arg(seg.gain).arg(prefix).arg(i);
+            } else {
+                filter += QString("aevalsrc=0:channel_layout=stereo:sample_rate=48000:d=%1[%2_a%3];")
+                              .arg(d).arg(prefix).arg(i);
+            }
+        }
+    }
+
+    for (int i = 0; i < segments.size(); ++i) {
+        filter += QString("[%1_vx%2]").arg(prefix).arg(i);
+        if (withAudio) filter += QString("[%1_a%2]").arg(prefix).arg(i);
+    }
+    filter += QString("concat=n=%1:v=1:a=%2[outv]").arg(segments.size()).arg(withAudio ? 1 : 0);
+    if (withAudio) filter += "[outa]";
+    return filter;
 }
 
 void TimelineWidget::copyTrimmedVideo() {
@@ -103,23 +212,12 @@ void TimelineWidget::copyTrimmedVideo() {
         return;
     }
 
-    // 1. Resolve dimensions and filters
-    int vidW = 1920;
-    int vidH = 1080;
-    const QWidget* topWindow = this->window();
-    if (const QObject* videoContainer = topWindow->findChild<QObject*>("VideoContainer")) {
-        auto* vwc = videoContainer->findChild<VideoWithCropWidget*>();
-        if (vwc) {
-            const QVariant vW = vwc->property("actualWidth");
-            const QVariant vH = vwc->property("actualHeight");
-            if (vW.isValid() && vW.toInt() > 0) vidW = vW.toInt();
-            if (vH.isValid() && vH.toInt() > 0) vidH = vH.toInt();
-        }
-    }
+    const ExportGeometry geo = resolveExportGeometry(this);
+    const int vidW = geo.vidW;
+    const int vidH = geo.vidH;
 
     const QString outputDir = getExportDir();
     QString finalPath = QDir::toNativeSeparators(outputDir + "/" + generateClippedName("mp4"));
-    QString inputPath = QDir::toNativeSeparators(currentFileUrl.toLocalFile());
 
     qint64 totalMs = 0;
     for (const auto& seg : segments) totalMs += (seg.endMs - seg.startMs);
@@ -127,107 +225,115 @@ void TimelineWidget::copyTrimmedVideo() {
     const auto exportSettings = this->exportSettings;
 
     isExporting = true;
-    const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
-    QString filter;
+    const bool multiSource = sources.size() > 1;
+    const double seekStart = multiSource ? 0.0 : qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
 
-    for (int i = 0; i < segments.size(); ++i) {
-        double s = (segments[i].startMs / 1000.0) - seekStart;
-        double d = (segments[i].endMs - segments[i].startMs) / 1000.0;
+    const QString filter = buildSegmentsGraph(segments, sources, overlays, vidW, vidH,
+                                              /*withAudio=*/true, hasAudioStream, currentAudioTrack,
+                                              seekStart, "s");
 
-        filter += QString("[0:v]trim=start=%1:duration=%2,setpts=PTS-STARTPTS[segment_v%3];")
-                  .arg(qMax(0.0, s)).arg(d).arg(i);
-        filter += buildFilterChain(QString("[segment_v%1]").arg(i),
-                                   QString("[v%1]").arg(i),
-                                   QString("seg%1").arg(i),
-                                   vidW,
-                                   vidH,
-                                   segments[i].filters);
-        filter += QString("[v%1]%2[vx%3];")
-                  .arg(i)
-                  .arg(cropScaleFilter(segments[i].cropRight, segments[i].cropLeft,
-                                       segments[i].cropBottom, segments[i].cropTop,
-                                       vidW, vidH))
-                  .arg(i);
-
-        filter += QString("[0:a:%1]atrim=start=%2:duration=%3,asetpts=PTS-STARTPTS,volume=%4,aresample=async=1[a%5];")
-                  .arg(currentAudioTrack).arg(qMax(0.0, s)).arg(d).arg(segments[i].gain).arg(i);
-    }
-
-    for (int i = 0; i < segments.size(); ++i) filter += QString("[vx%1][a%1]").arg(i);
-
-    filter += QString("concat=n=%1:v=1:a=1[outv][outa]").arg(segments.size());
-
-
-    double originalBitrateKbps = (originalFileSize * 8.0) / (durationMs / 1000.0) / 1000.0;
+    double originalBitrateKbps = (originalFileSize * 8.0) / (qMax<qint64>(1, durationMs) / 1000.0) / 1000.0;
     double estimatedSizeMB = (originalBitrateKbps * durationSec) / 8192.0;
     bool shouldCompress = (estimatedSizeMB >= exportSettings.videoCompressionThresholdMB);
+    const bool nv = hasNvidiaEncoder();
+    const double targetMB = exportSettings.targetCompressedSizeMB;
 
-    QStringList args;
-    args << "-y" << "-ss" << QString::number(seekStart) << "-i" << inputPath;
-    args << "-filter_complex" << filter;
-    args << "-map" << "[outv]" << "-map" << "[outa]";
+    // SAFETY MARGIN: one-pass bitrate targeting always has some variance (scene
+    // complexity, muxing/container overhead, encoder rate-control accuracy), so aiming
+    // exactly at the configured target reliably overshoots it. Aim under it instead,
+    // and verify+retry below to guarantee the final file never exceeds the target.
+    auto buildArgs = [=](double videoBitrateKbps) {
+        QStringList a;
+        a << "-y";
+        if (!multiSource && seekStart > 0.0) a << "-ss" << QString::number(seekStart);
+        for (const auto &src : sources) a << "-i" << QDir::toNativeSeparators(src.path);
+        a << "-filter_complex" << filter;
+        a << "-map" << "[outv]" << "-map" << "[outa]";
 
+        if (shouldCompress) {
+            if (nv) {
+                a << "-c:v" << "h264_nvenc" << "-preset" << "p4" << "-tune" << "hq" << "-rc" << "vbr";
+            } else {
+                a << "-c:v" << "libx264" << "-preset" << "veryfast";
+            }
+            a << "-b:v" << QString("%1k").arg(qRound(videoBitrateKbps))
+              << "-maxrate" << QString("%1k").arg(qRound(videoBitrateKbps * 1.15))
+              << "-bufsize" << QString("%1k").arg(qRound(videoBitrateKbps * 1.3));
+            a << "-c:a" << "aac" << "-b:a" << QString("%1k").arg(exportSettings.compressedAudioBitrateKbps);
+        } else {
+            int targetK = static_cast<int>(originalBitrateKbps);
+            if (nv) {
+                a << "-c:v" << "h264_nvenc" << "-preset" << "p7" << "-rc" << "vbr"
+                  << "-b:v" << QString("%1k").arg(targetK) << "-maxrate" << QString("%1k").arg(targetK * 2);
+            } else {
+                a << "-c:v" << "libx264" << "-preset" << "slow" << "-crf" << "18"
+                  << "-maxrate" << QString("%1k").arg(targetK) << "-bufsize" << QString("%1k").arg(targetK * 2);
+            }
+            a << "-c:a" << "aac" << "-b:a" << QString("%1k").arg(exportSettings.audioBitrateKbps);
+        }
+
+        a << "-pix_fmt" << "yuv420p" << "-movflags" << "+faststart" << "-progress" << "pipe:1"
+          << QDir::toNativeSeparators(finalPath);
+        return a;
+    };
+
+    double initialVideoBitrateKbps = 0.0;
     if (shouldCompress) {
-        double targetSizeBytes = exportSettings.targetCompressedSizeMB * 1024 * 1024;
-        double audioBitrateBps = exportSettings.compressedAudioBitrateKbps * 1000.0;
-        double videoBitrateKbps = qBound(200.0, (targetSizeBytes * 8 / durationSec - audioBitrateBps) / 1000.0, 12000.0);
-
-        if (hasNvidiaEncoder()) {
-            args << "-c:v" << "h264_nvenc" << "-preset" << "p1" << "-tune" << "hq" << "-rc" << "vbr";
-        } else {
-            args << "-c:v" << "libx264" << "-preset" << "ultrafast";
-        }
-
-        args << "-b:v" << QString("%1k").arg(videoBitrateKbps)
-             << "-maxrate" << QString("%1k").arg(static_cast<int>(videoBitrateKbps * 1.5))
-             << "-bufsize" << QString("%1k").arg(static_cast<int>(videoBitrateKbps * 2));
-
-        args << "-c:a" << "aac" << "-b:a" << QString("%1k").arg(exportSettings.compressedAudioBitrateKbps);
-    } else {
-        int targetK = static_cast<int>(originalBitrateKbps);
-
-        if (hasNvidiaEncoder()) {
-            args << "-c:v" << "h264_nvenc" << "-preset" << "p7" << "-rc" << "vbr"
-                 << "-b:v" << QString("%1k").arg(targetK) << "-maxrate" << QString("%1k").arg(targetK * 2);
-        } else {
-            args << "-c:v" << "libx264" << "-preset" << "slow" << "-crf" << "18"
-                 << "-maxrate" << QString("%1k").arg(targetK) << "-bufsize" << QString("%1k").arg(targetK * 2);
-        }
-        args << "-c:a" << "aac" << "-b:a" << QString("%1k").arg(exportSettings.audioBitrateKbps);
+        const double targetSizeBytes = targetMB * 1024 * 1024 * 0.93;
+        const double audioBitrateBps = exportSettings.compressedAudioBitrateKbps * 1000.0;
+        initialVideoBitrateKbps = qBound(150.0, (targetSizeBytes * 8 / durationSec - audioBitrateBps) / 1000.0, 12000.0);
     }
 
-    args << "-pix_fmt" << "yuv420p" << "-movflags" << "+faststart" << "-progress" << "pipe:1" << QDir::toNativeSeparators(finalPath);
+    const int maxAttempts = 3;
+    auto runAttempt = QSharedPointer<std::function<void(double, int)>>::create();
+    *runAttempt = [this, runAttempt, buildArgs, finalPath, shouldCompress, targetMB, maxAttempts, totalMs](double videoBitrateKbps, int attempt) {
+        auto *ffmpeg = new QProcess(this);
+        QSharedPointer<QString> ffmpegLog(new QString());
 
-    auto *ffmpeg = new QProcess(this);
-    QSharedPointer<QString> ffmpegLog(new QString());
+        ffmpeg->setProcessChannelMode(QProcess::MergedChannels);
+        connect(ffmpeg, &QProcess::readyRead, [ffmpeg, ffmpegLog]() {
+            ffmpegLog->append(ffmpeg->peek(ffmpeg->bytesAvailable()));
+        });
 
-    ffmpeg->setProcessChannelMode(QProcess::MergedChannels);
-    connect(ffmpeg, &QProcess::readyRead, [ffmpeg, ffmpegLog]() {
-        QByteArray data = ffmpeg->peek(ffmpeg->bytesAvailable());
-        ffmpegLog->append(data);
-    });
+        showProgressNotification(ffmpeg, totalMs);
 
-    showProgressNotification(ffmpeg, totalMs);
+        connect(ffmpeg, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                this, [this, finalPath, ffmpeg, ffmpegLog, shouldCompress, targetMB, maxAttempts, videoBitrateKbps, attempt, runAttempt](int exitCode) {
+            if (exitCode != 0) {
+                isExporting = false;
+                qDebug() << "FFMPEG FAILURE LOG:\n" << *ffmpegLog;
+                emit exportFinished(false, "EXPORT FAILED");
+                QMessageBox::critical(this->window(), "Export Failed",
+                    "FFmpeg Details:\n\n" + (*ffmpegLog).right(600));
+                update();
+                ffmpeg->deleteLater();
+                return;
+            }
 
-    connect(ffmpeg, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, finalPath, ffmpeg, ffmpegLog](int exitCode) {
-        isExporting = false;
-        if (exitCode == 0) {
+            const double actualMB = QFileInfo(finalPath).size() / (1024.0 * 1024.0);
+            if (shouldCompress && actualMB > targetMB && attempt < maxAttempts && videoBitrateKbps > 160.0) {
+                // Still over budget: scale the bitrate down by the actual overshoot ratio
+                // (plus a little extra headroom) and re-encode until it fits.
+                const double ratio = qBound(0.4, (targetMB / qMax(0.1, actualMB)) * 0.92, 0.97);
+                const double nextBitrate = qMax(150.0, videoBitrateKbps * ratio);
+                ffmpeg->deleteLater();
+                (*runAttempt)(nextBitrate, attempt + 1);
+                return;
+            }
+
+            isExporting = false;
             auto m = new QMimeData();
             m->setUrls({QUrl::fromLocalFile(finalPath)});
             QApplication::clipboard()->setMimeData(m);
-            showNotification("Copied trimmed video (High Fidelity)");
-        } else {
-            qDebug() << "FFMPEG FAILURE LOG:\n" << *ffmpegLog;
-            QMessageBox::critical(this->window(), "Export Failed",
-                "FFmpeg Details:\n\n" + (*ffmpegLog).right(600));
-            showNotification("FAILED");
-        }
-        update();
-        ffmpeg->deleteLater();
-    });
+            emit exportFinished(true, QString("VIDEO EXPORTED · %1 MB · COPIED TO CLIPBOARD").arg(actualMB, 0, 'f', 1));
+            update();
+            ffmpeg->deleteLater();
+        });
 
-    ffmpeg->start(getFFmpegPath(), args);
+        ffmpeg->start(getFFmpegPath(), buildArgs(videoBitrateKbps));
+    };
+
+    (*runAttempt)(initialVideoBitrateKbps, 0);
 }
 
 void TimelineWidget::copyTrimmedVideoMuted() {
@@ -237,17 +343,9 @@ void TimelineWidget::copyTrimmedVideoMuted() {
         return;
     }
 
-    int vidW = 1920, vidH = 1080;
-    const QWidget* topWindow = this->window();
-    if (const QObject* videoContainer = topWindow->findChild<QObject*>("VideoContainer")) {
-        auto* vwc = videoContainer->findChild<VideoWithCropWidget*>();
-        if (vwc) {
-            const QVariant vW = vwc->property("actualWidth");
-            const QVariant vH = vwc->property("actualHeight");
-            if (vW.isValid() && vW.toInt() > 0) vidW = vW.toInt();
-            if (vH.isValid() && vH.toInt() > 0) vidH = vH.toInt();
-        }
-    }
+    const ExportGeometry geo = resolveExportGeometry(this);
+    const int vidW = geo.vidW;
+    const int vidH = geo.vidH;
 
     QString outputDir = getExportDir();
     QString finalPath = outputDir + "/MUTED_" + generateClippedName("mp4");
@@ -257,7 +355,7 @@ void TimelineWidget::copyTrimmedVideoMuted() {
     const double durationSec = qMax(0.1, totalMs / 1000.0);
     const auto exportSettings = this->exportSettings;
 
-    const double timeRatio = static_cast<double>(totalMs) / static_cast<double>(durationMs);
+    const double timeRatio = static_cast<double>(totalMs) / static_cast<double>(qMax<qint64>(1, durationMs));
     double weightedSpatialRatio = 0.0;
     for (const auto &seg : segments) {
         const double segDuration = qMax<qint64>(1, seg.endMs - seg.startMs);
@@ -267,120 +365,139 @@ void TimelineWidget::copyTrimmedVideoMuted() {
     const double estMb = (originalFileSize * timeRatio * spatialRatio) / (1024.0 * 1024.0);
 
     isExporting = true;
-    const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
+    const bool multiSource = sources.size() > 1;
+    const double seekStart = multiSource ? 0.0 : qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
 
-    QString filter;
-    for (int i = 0; i < segments.size(); ++i) {
-        double s = (segments[i].startMs / 1000.0) - seekStart;
-        double d = (segments[i].endMs - segments[i].startMs) / 1000.0;
-        filter += QString("[0:v]trim=start=%1:duration=%2,setpts=PTS-STARTPTS[segment_v%3];")
-                  .arg(qMax(0.0, s)).arg(d).arg(i);
-        filter += buildFilterChain(QString("[segment_v%1]").arg(i),
-                                   QString("[v%1]").arg(i),
-                                   QString("muted%1").arg(i),
-                                   vidW,
-                                   vidH,
-                                   segments[i].filters);
-        filter += QString("[v%1]%2[vx%3];")
-                  .arg(i)
-                  .arg(cropScaleFilter(segments[i].cropRight, segments[i].cropLeft,
-                                       segments[i].cropBottom, segments[i].cropTop,
-                                       vidW, vidH))
-                  .arg(i);
+    const QString filter = buildSegmentsGraph(segments, sources, overlays, vidW, vidH,
+                                              /*withAudio=*/false, hasAudioStream, currentAudioTrack,
+                                              seekStart, "m");
+
+    const bool nv = hasNvidiaEncoder();
+    const bool shouldCompress = estMb > exportSettings.videoCompressionThresholdMB;
+    const double targetMB = exportSettings.targetCompressedSizeMB;
+
+    auto buildArgs = [=](double videoBitrateKbps) {
+        QStringList a;
+        a << "-y";
+        if (!multiSource && seekStart > 0.0) a << "-ss" << QString::number(seekStart);
+        for (const auto &src : sources) a << "-i" << QDir::toNativeSeparators(src.path);
+        a << "-filter_complex" << filter
+          << "-map" << "[outv]"
+          << "-an";
+
+        if (nv) {
+            a << "-c:v" << "h264_nvenc" << "-preset" << "p1" << "-tune" << "ull" << "-zerolatency" << "1";
+        } else {
+            a << "-c:v" << "libx264" << "-preset" << "veryfast" << "-tune" << "zerolatency";
+        }
+
+        a << "-pix_fmt" << "yuv420p";
+
+        if (shouldCompress) {
+            a << "-r" << "25" << "-b:v" << QString("%1k").arg(qRound(videoBitrateKbps))
+              << "-maxrate" << QString("%1k").arg(qRound(videoBitrateKbps * 1.15))
+              << "-bufsize" << QString("%1k").arg(qRound(videoBitrateKbps * 1.3));
+        } else {
+            if (nv) a << "-rc" << "constqp" << "-qp" << "23";
+            else a << "-crf" << "23";
+        }
+
+        a << "-progress" << "pipe:1" << QDir::toNativeSeparators(finalPath);
+        return a;
+    };
+
+    double initialVideoBitrateKbps = 0.0;
+    if (shouldCompress) {
+        const double targetSizeBytes = targetMB * 1024 * 1024 * 0.93;
+        initialVideoBitrateKbps = qBound(150.0, (targetSizeBytes * 8 / durationSec), 15000.0);
     }
-    for (int i = 0; i < segments.size(); ++i) filter += QString("[vx%1]").arg(i);
 
-    filter += QString("concat=n=%1:v=1:a=0[outv]").arg(segments.size());
+    const int maxAttempts = 3;
+    auto runAttempt = QSharedPointer<std::function<void(double, int)>>::create();
+    *runAttempt = [this, runAttempt, buildArgs, finalPath, shouldCompress, targetMB, maxAttempts, totalMs](double videoBitrateKbps, int attempt) {
+        auto *ffmpeg = new QProcess(this);
+        showProgressNotification(ffmpeg, totalMs);
 
-    QStringList args;
-    args << "-y" << "-ss" << QString::number(seekStart) << "-i" << QDir::toNativeSeparators(currentFileUrl.toLocalFile())
-         << "-filter_complex" << filter
-         << "-map" << "[outv]"
-         << "-an";
+        connect(ffmpeg, &QProcess::finished, this,
+                [this, finalPath, ffmpeg, shouldCompress, targetMB, maxAttempts, videoBitrateKbps, attempt, runAttempt](int exitCode) {
+            if (exitCode != 0) {
+                isExporting = false;
+                emit exportFinished(false, "MUTED EXPORT FAILED");
+                update();
+                ffmpeg->deleteLater();
+                return;
+            }
 
-    bool nv = hasNvidiaEncoder();
-    if (nv) {
-        args << "-c:v" << "h264_nvenc" << "-preset" << "p1" << "-tune" << "ull" << "-zerolatency" << "1";
-    } else {
-        args << "-c:v" << "libx264" << "-preset" << "ultrafast" << "-tune" << "zerolatency";
-    }
+            const double actualMB = QFileInfo(finalPath).size() / (1024.0 * 1024.0);
+            if (shouldCompress && actualMB > targetMB && attempt < maxAttempts && videoBitrateKbps > 160.0) {
+                const double ratio = qBound(0.4, (targetMB / qMax(0.1, actualMB)) * 0.92, 0.97);
+                const double nextBitrate = qMax(150.0, videoBitrateKbps * ratio);
+                ffmpeg->deleteLater();
+                (*runAttempt)(nextBitrate, attempt + 1);
+                return;
+            }
 
-    args << "-pix_fmt" << "yuv420p";
-
-    if (estMb > exportSettings.videoCompressionThresholdMB) {
-        int videoBitrateKbps = qBound(200, static_cast<int>((exportSettings.targetCompressedSizeMB * 8192) / durationSec), 15000);
-        args << "-r" << "25" << "-b:v" << QString("%1k").arg(videoBitrateKbps);
-    } else {
-        if (nv) args << "-rc" << "constqp" << "-qp" << "23";
-        else args << "-crf" << "23";
-    }
-
-    args << "-progress" << "pipe:1" << QDir::toNativeSeparators(finalPath);
-
-    auto ffmpeg = new QProcess(this);
-    showProgressNotification(ffmpeg, totalMs);
-
-    connect(ffmpeg, &QProcess::finished, this, [this, finalPath, ffmpeg](int exitCode) {
-        isExporting = false;
-        if (exitCode == 0) {
+            isExporting = false;
             auto *m = new QMimeData();
             m->setUrls({QUrl::fromLocalFile(finalPath)});
             QApplication::clipboard()->setMimeData(m);
-            showNotification("MUTED CRUNCH COMPLETE ✅");
-        } else {
-            showNotification("MUTED EXPORT FAILED ❌");
-        }
-        update();
-        ffmpeg->deleteLater();
-    });
-    ffmpeg->start(getFFmpegPath(), args);
+            emit exportFinished(true, QString("MUTED VIDEO EXPORTED · %1 MB · COPIED").arg(actualMB, 0, 'f', 1));
+            update();
+            ffmpeg->deleteLater();
+        });
+
+        ffmpeg->start(getFFmpegPath(), buildArgs(videoBitrateKbps));
+    };
+
+    (*runAttempt)(initialVideoBitrateKbps, 0);
 }
 
 void TimelineWidget::copyTrimmedGif() {
-    if (segments.empty()) return;
+    if (segments.empty() || isExporting) return;
     if (!hasVideoStream) {
         showNotification("GIF EXPORT NEEDS VIDEO");
         return;
     }
 
-    int vidW = 1920, vidH = 1080;
-    const QWidget* topWindow = this->window();
-    if (const QObject* videoContainer = topWindow->findChild<QObject*>("VideoContainer")) {
-        auto* vwc = videoContainer->findChild<VideoWithCropWidget*>();
-        if (vwc) {
-            const QVariant vW = vwc->property("actualWidth");
-            const QVariant vH = vwc->property("actualHeight");
-            if (vW.isValid() && vW.toInt() > 0) vidW = vW.toInt();
-            if (vH.isValid() && vH.toInt() > 0) vidH = vH.toInt();
-        }
-    }
+    const ExportGeometry geo = resolveExportGeometry(this);
+    const int vidW = geo.vidW;
+    const int vidH = geo.vidH;
 
     const QString outputDir = getExportDir();
     QString finalPath = outputDir + "/" + generateClippedName("gif");
     const auto exportSettings = this->exportSettings;
 
-    const double duration = (segments[0].endMs - segments[0].startMs) / 1000.0;
-    const double seekStart = qMax(0.0, (segments[0].startMs / 1000.0));
+    qint64 totalMs = 0;
+    for (const auto &seg : segments) totalMs += (seg.endMs - seg.startMs);
 
-    const auto &seg = segments.first();
-    QString filter = buildFilterChain("[0:v]", "[filtered]", "gif", vidW, vidH, seg.filters);
-    const QString cropFilter = cropScaleFilter(seg.cropRight, seg.cropLeft, seg.cropBottom, seg.cropTop, vidW, vidH);
-
-    filter += QString("[filtered]%1,fps=%2,scale=%3:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse")
-                     .arg(cropFilter).arg(exportSettings.gifFps).arg(exportSettings.gifWidth);
+    // The whole composition (every segment, every source, overlays with their
+    // time ranges) goes into the GIF — same graph as the video exports.
+    QString filter = buildSegmentsGraph(segments, sources, overlays, vidW, vidH,
+                                        /*withAudio=*/false, hasAudioStream, currentAudioTrack,
+                                        /*seekStart=*/0.0, "g");
+    filter += QString(";[outv]fps=%1,scale=%2:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse[gif]")
+                  .arg(exportSettings.gifFps).arg(exportSettings.gifWidth);
 
     QStringList args;
-    args << "-y" << "-ss" << QString::number(seekStart) << "-t" << QString::number(duration)
-         << "-i" << QDir::toNativeSeparators(currentFileUrl.toLocalFile()) << "-filter_complex" << filter << "-threads" << "0"
+    args << "-y";
+    for (const auto &src : sources) args << "-i" << QDir::toNativeSeparators(src.path);
+    args << "-filter_complex" << filter << "-map" << "[gif]" << "-threads" << "0"
+         << "-progress" << "pipe:1"
          << QDir::toNativeSeparators(finalPath);
 
+    isExporting = true;
     QProcess *ffmpeg = new QProcess(this);
-    showProgressNotification(ffmpeg, (segments[0].endMs - segments[0].startMs));
-    connect(ffmpeg, &QProcess::finished, this, [this, finalPath, ffmpeg]() {
-        QMimeData *m = new QMimeData();
-        m->setUrls({QUrl::fromLocalFile(finalPath)});
-        QApplication::clipboard()->setMimeData(m);
-        showNotification("GIF COPIED ✅");
+    showProgressNotification(ffmpeg, totalMs);
+    connect(ffmpeg, &QProcess::finished, this, [this, finalPath, ffmpeg](int exitCode) {
+        isExporting = false;
+        if (exitCode == 0) {
+            QMimeData *m = new QMimeData();
+            m->setUrls({QUrl::fromLocalFile(finalPath)});
+            QApplication::clipboard()->setMimeData(m);
+            emit exportFinished(true, "GIF EXPORTED · COPIED TO CLIPBOARD");
+        } else {
+            emit exportFinished(false, "GIF EXPORT FAILED");
+        }
         ffmpeg->deleteLater();
     });
     ffmpeg->start(getFFmpegPath(), args);
@@ -397,29 +514,46 @@ void TimelineWidget::copyTrimmedAudio() {
     QString finalPath = outputDir + "/" + generateClippedName("mp3");
     const auto exportSettings = this->exportSettings;
 
+    qint64 totalMs = 0;
+    for (const auto& seg : segments) totalMs += (seg.endMs - seg.startMs);
+
     isExporting = true;
-    double seekStart = qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
+    const bool multiSource = sources.size() > 1;
+    const double seekStart = multiSource ? 0.0 : qMax(0.0, (segments[0].startMs / 1000.0) - 0.5);
 
     QString filter;
     for (int i = 0; i < segments.size(); ++i) {
-        double s = (segments[i].startMs / 1000.0) - seekStart;
-        double d = (segments[i].endMs - segments[i].startMs) / 1000.0;
-        filter += QString("[0:a:%1]atrim=start=%2:duration=%3,asetpts=PTS-STARTPTS[a%4];")
-                  .arg(currentAudioTrack).arg(qMax(0.0, s)).arg(d).arg(i);
+        const auto &seg = segments[i];
+        const int srcIdx = qBound(0, seg.sourceIdx, static_cast<int>(sources.size()) - 1);
+        const auto &src = sources[srcIdx];
+        const double sLocal = qMax(0.0, (seg.startMs - src.offsetMs) / 1000.0 - (srcIdx == 0 ? seekStart : 0.0));
+        const double d = (seg.endMs - seg.startMs) / 1000.0;
+        const bool segHasAudio = (srcIdx == 0) ? hasAudioStream : src.hasAudio;
+        if (segHasAudio) {
+            const int track = (srcIdx == 0) ? currentAudioTrack : 0;
+            filter += QString("[%1:a:%2]atrim=start=%3:duration=%4,asetpts=PTS-STARTPTS,"
+                              "aresample=async=1,aformat=sample_rates=48000:channel_layouts=stereo[a%5];")
+                          .arg(srcIdx).arg(track).arg(sLocal).arg(d).arg(i);
+        } else {
+            filter += QString("aevalsrc=0:channel_layout=stereo:sample_rate=48000:d=%1[a%2];").arg(d).arg(i);
+        }
     }
 
     for (int i = 0; i < segments.size(); ++i) filter += QString("[a%1]").arg(i);
     filter += QString("concat=n=%1:v=0:a=1[outa]").arg(segments.size());
 
     QStringList args;
-    args << "-y" << "-ss" << QString::number(seekStart) << "-i" << QDir::toNativeSeparators(currentFileUrl.toLocalFile())
-         << "-filter_complex" << filter
+    args << "-y";
+    if (!multiSource && seekStart > 0.0) args << "-ss" << QString::number(seekStart);
+    for (const auto &src : sources) args << "-i" << QDir::toNativeSeparators(src.path);
+    args << "-filter_complex" << filter
          << "-map" << "[outa]"
          << "-c:a" << "libmp3lame" << "-b:a" << QString("%1k").arg(exportSettings.audioBitrateKbps) << "-threads" << "0"
+         << "-progress" << "pipe:1"
          << QDir::toNativeSeparators(finalPath);
 
     auto *ffmpeg = new QProcess(this);
-    showNotification("EXPORTING AUDIO... 🎵");
+    showProgressNotification(ffmpeg, totalMs);
 
     connect(ffmpeg, &QProcess::finished, this, [this, finalPath, ffmpeg](int exitCode) {
         isExporting = false;
@@ -427,9 +561,9 @@ void TimelineWidget::copyTrimmedAudio() {
             auto *m = new QMimeData();
             m->setUrls({QUrl::fromLocalFile(finalPath)});
             QApplication::clipboard()->setMimeData(m);
-            showNotification("AUDIO SAVED & COPIED ✅");
+            emit exportFinished(true, "AUDIO EXPORTED · COPIED TO CLIPBOARD");
         } else {
-            showNotification("AUDIO EXPORT FAILED ❌");
+            emit exportFinished(false, "AUDIO EXPORT FAILED");
         }
         ffmpeg->deleteLater();
     });

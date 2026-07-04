@@ -11,6 +11,15 @@ bool matchesShortcut(QKeyEvent *event, const QString &shortcut) {
 }
 
 void TimelineWidget::keyPressEvent(QKeyEvent *event) {
+    if (!handleGlobalKey(event)) {
+        QWidget::keyPressEvent(event);
+    }
+}
+
+// Runs the editor's keyboard commands. Called both from this widget's own
+// keyPressEvent and from an application-level filter in MainWindow, so
+// shortcuts like S (split) work no matter which panel has focus.
+bool TimelineWidget::handleGlobalKey(QKeyEvent *event) {
     const auto settings = playbackSettings;
     auto *mainWindow = qobject_cast<MainWindow*>(window());
     const auto editorSettings = mainWindow ? mainWindow->getEditorSettings() : MainWindow::EditorSettings{};
@@ -21,7 +30,7 @@ void TimelineWidget::keyPressEvent(QKeyEvent *event) {
         emit playheadMoved(currentPosMs);
         showNotification("⏪ REPLAY");
         update();
-        return;
+        return true;
     }
 
     if (matchesShortcut(event, editorSettings.keyForward)) {
@@ -29,7 +38,7 @@ void TimelineWidget::keyPressEvent(QKeyEvent *event) {
         emitVisualStateForCurrentContext();
         emit playheadMoved(currentPosMs);
         update();
-        return;
+        return true;
     }
 
     if (matchesShortcut(event, editorSettings.keyStepBack)) {
@@ -37,91 +46,77 @@ void TimelineWidget::keyPressEvent(QKeyEvent *event) {
         emitVisualStateForCurrentContext();
         emit playheadMoved(currentPosMs);
         update();
-        return;
+        return true;
     }
-    else if (matchesShortcut(event, editorSettings.keyStepForward)) {
+    if (matchesShortcut(event, editorSettings.keyStepForward)) {
         currentPosMs = qMin(durationMs, currentPosMs + settings.minorSeekMs);
         emitVisualStateForCurrentContext();
         emit playheadMoved(currentPosMs);
         update();
-        return;
+        return true;
     }
 
     if (matchesShortcut(event, editorSettings.keyUndo)) {
         undo();
         showNotification("UNDO");
-        return;
+        return true;
     }
-    else if (matchesShortcut(event, editorSettings.keyRedo)) {
+    if (matchesShortcut(event, editorSettings.keyRedo)) {
         redo();
         showNotification("REDO");
-        return;
+        return true;
     }
 
-    else if (matchesShortcut(event, editorSettings.keyExportGif)) {
+    if (matchesShortcut(event, editorSettings.keyExportGif)) {
         copyTrimmedGif();
+        return true;
     }
-    else if (matchesShortcut(event, editorSettings.keyExportAudio)) {
+    if (matchesShortcut(event, editorSettings.keyExportAudio)) {
         copyTrimmedAudio();
+        return true;
     }
-    else if (matchesShortcut(event, editorSettings.keyExportMutedVideo)) {
+    if (matchesShortcut(event, editorSettings.keyExportMutedVideo)) {
         copyTrimmedVideoMuted();
+        return true;
     }
-    else if (matchesShortcut(event, editorSettings.keyExportVideo)) {
+    if (matchesShortcut(event, editorSettings.keyExportVideo)) {
         copyTrimmedVideo();
+        return true;
     }
 
-    else if (matchesShortcut(event, editorSettings.keyPlayPause)) {
+    if (matchesShortcut(event, editorSettings.keyPlayPause)) {
         emit requestTogglePlayback();
         event->accept();
+        return true;
     }
-    else if (matchesShortcut(event, editorSettings.keySplit)) {
+    if (matchesShortcut(event, editorSettings.keySplit)) {
         saveState();
         splitAtPlayhead();
+        return true;
     }
-    else if (matchesShortcut(event, editorSettings.keyDeleteClip) || event->key() == Qt::Key_Backspace) {
-        QSet<int> toDelete = selectedSegmentIndices;
-        if (selectedSegmentIdx != -1) toDelete.insert(selectedSegmentIdx);
-
-        if (!toDelete.isEmpty()) {
-            saveState();
-
-            QList<int> sortedIndices = toDelete.values();
-            std::sort(sortedIndices.begin(), sortedIndices.end(), std::greater<int>());
-
-            for (int idx : sortedIndices) {
-                if (idx >= 0 && idx < static_cast<int>(segments.size())) {
-                    segments.erase(segments.begin() + idx);
-                }
-            }
-
-            selectedSegmentIndices.clear();
-            selectedSegmentIdx = -1;
-            showNotification(QString("DELETED %1 CLIPS").arg(sortedIndices.size()));
-            emit clipTrimmed();
-            update();
-            return;
+    if (matchesShortcut(event, editorSettings.keyDeleteClip) || event->key() == Qt::Key_Backspace) {
+        // A selected overlay clip wins over segment deletion.
+        if (selectedOverlayIdx != -1) {
+            deleteSelectedOverlay();
+        } else {
+            deleteActiveSelection();
         }
+        return true;
     }
 
-    // Inside keyPressEvent, under the alt + A logic:
-    else if (matchesShortcut(event, editorSettings.keyCycleAudioTrack)) {
+    if (matchesShortcut(event, editorSettings.keyCycleAudioTrack)) {
         if (totalAudioTracks > 1) {
             currentAudioTrack = (currentAudioTrack + 1) % totalAudioTracks;
-
             loadAudioFast(currentFileUrl.toLocalFile());
-
-            // Add this specific emission if not already there
             emit requestAudioTrackChange(currentAudioTrack);
 
             QString name = (currentAudioTrack < trackNames.size())
                            ? trackNames[currentAudioTrack]
                            : QString("Track %1").arg(currentAudioTrack + 1);
-
             showNotification(QString("🔊 %1").arg(name));
         }
+        return true;
     }
-    else {
-        QWidget::keyPressEvent(event);
-    }
+
+    return false;
 }

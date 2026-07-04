@@ -3,6 +3,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QCoreApplication>
+#include <QSharedPointer>
 
 #include "../Includes/timelinewidget.h"
 
@@ -62,6 +63,49 @@ void TimelineWidget::loadAudioFast(const QString &inputPath) {
 
     ffmpeg->start(getFFToolPath("ffmpeg"), args);
 }
+
+// Waveform for a source appended to the end of the timeline. Samples are
+// produced at the same fixed density as loadAudioFast (8000 Hz / 80-sample
+// windows = 100 samples per second), so appending keeps the index→time
+// mapping of the combined array valid.
+void TimelineWidget::appendAudioWaveform(const QString &inputPath) {
+    QString tempAudioPath = QDir::tempPath() + QString("/potato_wave_%1.raw").arg(qAbs(qHash(inputPath)));
+    auto *ffmpeg = new QProcess(this);
+    QStringList args;
+    args << "-y" << "-i" << inputPath
+         << "-map" << "0:a:0"
+         << "-f" << "s16le" << "-ac" << "1" << "-ar" << "8000" << tempAudioPath;
+
+    connect(ffmpeg, &QProcess::finished, this, [this, tempAudioPath, ffmpeg]() {
+        QFile file(tempAudioPath);
+        if (file.open(QIODevice::ReadOnly)) {
+            QByteArray data = file.readAll();
+            file.close();
+            QFile::remove(tempAudioPath);
+            const auto *samples = reinterpret_cast<const int16_t*>(data.constData());
+            int count = data.size() / sizeof(int16_t);
+            float localMax = maxAmplitude;
+            for (int i = 0; i < count; i += 80) {
+                double sum = 0;
+                int actualWindow = qMin(80, count - i);
+                for (int j = 0; j < actualWindow; ++j) {
+                    double val = samples[i + j] / 32768.0;
+                    sum += val * val;
+                }
+                float rms = std::sqrt(sum / actualWindow);
+                rms = std::pow(rms, 0.6f);
+                audioSamples.push_back(rms);
+                if (rms > localMax) localMax = rms;
+            }
+            maxAmplitude = localMax;
+        }
+        update();
+        ffmpeg->deleteLater();
+    });
+
+    ffmpeg->start(getFFToolPath("ffmpeg"), args);
+}
+
 void TimelineWidget::autoCutSilence() {
     if (durationMs <= 0 || isExporting || segments.empty() || !hasAudioStream) {
         showNotification("NO AUDIO TRACK TO ANALYZE");
@@ -70,98 +114,124 @@ void TimelineWidget::autoCutSilence() {
     saveState();
     showNotification("ANALYZING TRIMMED SECTIONS");
 
-    // Capture the current segments we want to process
-    // We copy them so that if the user changes the timeline while FFmpeg runs, we don't crash
-    QList<Segment> originalWorkArea = segments;
+    // Copy the segments so timeline edits during analysis can't crash us.
+    const QList<Segment> workArea = segments;
+    const auto settings = autoCutSettings;
 
-    // We'll use a complex filter to only analyze the segments you've kept
-    // This is more efficient than analyzing the whole file
-    QStringList filterParts;
-    for (const auto& seg : originalWorkArea) {
-        double s = seg.startMs / 1000.0;
-        double d = (seg.endMs - seg.startMs) / 1000.0;
-        filterParts << QString("between(t,%1,%2)").arg(s).arg(s + d);
+    // Every source that has audio gets its own silencedetect pass (silence
+    // timestamps are source-local, so one pass per file). Segments from
+    // sources without audio pass through untouched.
+    QSet<int> audioSources;
+    for (const auto &seg : workArea) {
+        const int si = qBound(0, seg.sourceIdx, static_cast<int>(sources.size()) - 1);
+        const bool srcHasAudio = (si == 0) ? hasAudioStream : sources[si].hasAudio;
+        if (srcHasAudio) audioSources.insert(si);
+    }
+    if (audioSources.isEmpty()) {
+        showNotification("NO AUDIO TO ANALYZE");
+        return;
     }
 
-    // This filter tells FFmpeg: "Only process audio if the time is within my segments"
-    const auto settings = autoCutSettings;
-    QString selectFilter = QString("aselect='%1',silencedetect=noise=%2dB:d=%3")
-                               .arg(filterParts.join("+"))
-                               .arg(settings.silenceThresholdDb, 0, 'f', 1)
-                               .arg(settings.minimumSilenceDurationSec, 0, 'f', 2);
+    struct DetectState {
+        QMap<int, QPair<QList<double>, QList<double>>> silence; // sourceIdx -> (starts, ends)
+        int pending = 0;
+    };
+    auto state = QSharedPointer<DetectState>::create();
+    state->pending = audioSources.size();
 
-    QStringList args;
-    args << "-i" << currentFileUrl.toLocalFile()
-         << "-map" << QString("0:a:%1").arg(currentAudioTrack)
-         << "-af" << selectFilter
-         << "-f" << "null" << "-";
+    auto finalize = [this, workArea, settings, state]() {
+        QList<Segment> newSegments;
+        const double padding = settings.paddingSec;
+        const double minimumClipDuration = settings.minimumClipDurationSec;
+        bool anySilence = false;
 
-    QProcess* ffmpeg = new QProcess(this);
-    connect(ffmpeg, &QProcess::finished, [this, ffmpeg, originalWorkArea, settings]() {
-        QString output = ffmpeg->readAllStandardError();
+        for (const auto &area : workArea) {
+            const int si = qBound(0, area.sourceIdx, static_cast<int>(sources.size()) - 1);
+            if (!state->silence.contains(si)) {
+                newSegments.push_back(area);
+                continue;
+            }
+            const QList<double> &silenceStarts = state->silence[si].first;
+            const QList<double> &silenceEnds = state->silence[si].second;
+            const qint64 offset = sources[si].offsetMs;
+            const double areaStart = (area.startMs - offset) / 1000.0; // source-local
+            const double areaEnd = (area.endMs - offset) / 1000.0;
+            double lastProcessed = areaStart;
 
-        QList<double> silenceStarts;
-        QList<double> silenceEnds;
-
-        const QRegularExpression startRegex("silence_start: (\\d+\\.?\\d*)");
-        const QRegularExpression endRegex("silence_end: (\\d+\\.?\\d*)");
-
-        auto startMatches = startRegex.globalMatch(output);
-        while (startMatches.hasNext()) silenceStarts << startMatches.next().captured(1).toDouble();
-
-        auto endMatches = endRegex.globalMatch(output);
-        while (endMatches.hasNext()) silenceEnds << endMatches.next().captured(1).toDouble();
-
-        if (silenceStarts.isEmpty()) {
-            showNotification("NO SILENCE FOUND IN TRIMMED AREA");
-        } else {
-            QList<Segment> newSegments;
-            const double padding = settings.paddingSec;
-            const double minimumClipDuration = settings.minimumClipDurationSec;
-
-            // Process each original segment and "sub-cut" it based on detected silence
-            for (const auto& area : originalWorkArea) {
-                double areaStart = area.startMs / 1000.0;
-                double areaEnd = area.endMs / 1000.0;
-                double lastProcessed = areaStart;
-
-                for (int i = 0; i < silenceStarts.size(); ++i) {
-                    double sStart = silenceStarts[i];
-                    double sEnd = (i < silenceEnds.size()) ? silenceEnds[i] : areaEnd;
-
-                    // If the silence is inside our current segment
-                    if (sStart > areaStart && sStart < areaEnd) {
-                        // Add the "loud" part before this silence
-                        if (sStart - lastProcessed > minimumClipDuration) {
-                            Segment s;
-                            s.startMs = qMax(areaStart, lastProcessed - (lastProcessed == areaStart ? 0 : padding)) * 1000;
-                            s.endMs = qMin(areaEnd, sStart + padding) * 1000;
-                            newSegments.push_back(s);
-                        }
-                        lastProcessed = sEnd;
+            for (int i = 0; i < silenceStarts.size(); ++i) {
+                const double sStart = silenceStarts[i];
+                const double sEnd = (i < silenceEnds.size()) ? silenceEnds[i] : areaEnd;
+                if (sStart > areaStart && sStart < areaEnd) {
+                    if (sStart - lastProcessed > minimumClipDuration) {
+                        Segment s = area; // keep crop / gain / sourceIdx
+                        s.startMs = offset + static_cast<qint64>(qMax(areaStart, lastProcessed - (lastProcessed == areaStart ? 0 : padding)) * 1000);
+                        s.endMs = offset + static_cast<qint64>(qMin(areaEnd, sStart + padding) * 1000);
+                        newSegments.push_back(s);
                     }
-                }
-
-                // Add the remaining "loud" part after the last silence in this area
-                if (areaEnd - lastProcessed > minimumClipDuration) {
-                    Segment s;
-                    s.startMs = qMax(areaStart, lastProcessed - padding) * 1000;
-                    s.endMs = areaEnd * 1000;
-                    newSegments.push_back(s);
+                    lastProcessed = sEnd;
+                    anySilence = true;
                 }
             }
 
-            if (!newSegments.isEmpty()) {
-                segments = newSegments;
-                showNotification(QString("CLEANED: %1 CLIPS").arg(segments.size()));
-                emit clipTrimmed();
+            if (areaEnd - lastProcessed > minimumClipDuration) {
+                Segment s = area;
+                s.startMs = offset + static_cast<qint64>(qMax(areaStart, lastProcessed - padding) * 1000);
+                s.endMs = offset + static_cast<qint64>(areaEnd * 1000);
+                newSegments.push_back(s);
             }
-            update();
         }
-        ffmpeg->deleteLater();
-    });
 
-    ffmpeg->start(getFFToolPath("ffmpeg"), args);
+        if (!anySilence) {
+            showNotification("NO SILENCE FOUND IN TRIMMED AREA");
+        } else if (!newSegments.isEmpty()) {
+            segments = newSegments;
+            showNotification(QString("CLEANED: %1 CLIPS").arg(segments.size()));
+            emit clipTrimmed();
+        }
+        update();
+    };
+
+    for (int si : audioSources) {
+        // Only analyze the parts of this source that are actually on the timeline.
+        QStringList filterParts;
+        for (const auto &seg : workArea) {
+            if (qBound(0, seg.sourceIdx, static_cast<int>(sources.size()) - 1) != si) continue;
+            const double s = (seg.startMs - sources[si].offsetMs) / 1000.0;
+            const double e = (seg.endMs - sources[si].offsetMs) / 1000.0;
+            filterParts << QString("between(t,%1,%2)").arg(s).arg(e);
+        }
+
+        const QString selectFilter = QString("aselect='%1',silencedetect=noise=%2dB:d=%3")
+                                         .arg(filterParts.join("+"))
+                                         .arg(settings.silenceThresholdDb, 0, 'f', 1)
+                                         .arg(settings.minimumSilenceDurationSec, 0, 'f', 2);
+
+        QStringList args;
+        args << "-i" << sources[si].path
+             << "-map" << QString("0:a:%1").arg(si == 0 ? currentAudioTrack : 0)
+             << "-af" << selectFilter
+             << "-f" << "null" << "-";
+
+        QProcess* ffmpeg = new QProcess(this);
+        connect(ffmpeg, &QProcess::finished, this, [this, ffmpeg, si, state, finalize]() {
+            const QString output = ffmpeg->readAllStandardError();
+
+            static const QRegularExpression startRegex("silence_start: (\\d+\\.?\\d*)");
+            static const QRegularExpression endRegex("silence_end: (\\d+\\.?\\d*)");
+
+            QList<double> starts, ends;
+            auto startMatches = startRegex.globalMatch(output);
+            while (startMatches.hasNext()) starts << startMatches.next().captured(1).toDouble();
+            auto endMatches = endRegex.globalMatch(output);
+            while (endMatches.hasNext()) ends << endMatches.next().captured(1).toDouble();
+
+            if (!starts.isEmpty()) state->silence[si] = {starts, ends};
+            ffmpeg->deleteLater();
+            if (--state->pending == 0) finalize();
+        });
+
+        ffmpeg->start(getFFToolPath("ffmpeg"), args);
+    }
 }
 void TimelineWidget::detectAudioTracks(const QString &path) {
     auto *probe = new QProcess(this);

@@ -5,6 +5,7 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <qtmetamacros.h>
 #include <QVideoFrame>
 #include <QVideoSink>
@@ -13,6 +14,9 @@
 #include <QString>
 #include <QtConcurrent>
 #include <QMutex>
+#include <QMimeData>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 
 class VideoWithCropWidget : public QWidget {
     Q_OBJECT
@@ -23,7 +27,8 @@ class VideoWithCropWidget : public QWidget {
 public:
     struct FilterObject {
         float l, t, r, b;
-        int mode; // 0: Blur, 1: Pixelate, 2: SolidColor
+        int mode;      // 0: Blur, 1: Pixelate, 2: SolidColor, 3: Text
+        QString text;  // only used by mode 3
     };
 
     QVideoSink* sink;
@@ -46,14 +51,18 @@ public:
 
     // PERFORMANCE: Atomic flag and mutex for off-thread frame processing
     QAtomicInt m_isProcessing{0};
+    // Set when a rescale request arrives while the worker is busy, so the
+    // last request is never silently dropped (matters when paused: no new
+    // frame would ever re-trigger the composite).
+    QAtomicInt m_pendingRescale{0};
     QMutex m_frameMutex;
-    QVideoFrame m_lastRawFrame; 
+    QVideoFrame m_lastRawFrame;
 
     explicit VideoWithCropWidget(QWidget* parent = nullptr) : QWidget(parent) {
         sink = new QVideoSink(this);
         setMouseTracking(true);
-        // CRITICAL: This allows the widget to catch Delete/Backspace key presses
         setFocusPolicy(Qt::StrongFocus);
+        setAcceptDrops(true); // effect buttons can be dragged straight onto the video
         this->setAttribute(Qt::WA_StyledBackground, true);
 
         connect(sink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame){
@@ -68,9 +77,62 @@ public:
         });
     }
 
+    // PERFORMANCE: baking blur/pixelate/blackout boxes into the frame is expensive
+    // (sub-image copy + two scales per box). This must never run on the UI thread's
+    // paintEvent, or every repaint during playback (30-60/sec) stalls input handling.
+    // It runs here, in the same background worker that already scales the raw frame.
+    static void compositeFilters(QImage &target, const QList<FilterObject> &filters) {
+        if (filters.isEmpty()) return;
+        QPainter ip(&target);
+        for (const auto &obj : filters) {
+            int x = obj.l * target.width();
+            int y = obj.t * target.height();
+            int w = (obj.r - obj.l) * target.width();
+            int h = (obj.b - obj.t) * target.height();
+            QRect area(x, y, w, h);
+            if (w <= 0 || h <= 0) continue;
+
+            if (obj.mode == 0 || obj.mode == 1) {
+                QImage sub = target.copy(area);
+                int scale = (obj.mode == 0) ? 10 : 30;
+                QImage small = sub.scaled(qMax(1, w / scale), qMax(1, h / scale), Qt::IgnoreAspectRatio, Qt::FastTransformation);
+                QImage blurred = small.scaled(w, h, Qt::IgnoreAspectRatio, (obj.mode == 0 ? Qt::SmoothTransformation : Qt::FastTransformation));
+                ip.drawImage(x, y, blurred);
+            } else if (obj.mode == 2) {
+                ip.fillRect(area, Qt::black);
+            } else { // Text overlay: mirrors ffmpeg drawtext (white, dark outline, centered)
+                ip.setRenderHint(QPainter::Antialiasing);
+                ip.setRenderHint(QPainter::TextAntialiasing);
+                QFont font;
+                font.setBold(true);
+                font.setPixelSize(qMax(8, qRound(h * 0.6)));
+                const QString text = obj.text.isEmpty() ? QStringLiteral("Your text") : obj.text;
+
+                QPainterPath path;
+                QFontMetrics fm(font);
+                const QRect textBounds = fm.boundingRect(area, Qt::AlignCenter | Qt::TextWordWrap, text);
+                int lineY = textBounds.top() + fm.ascent();
+                for (const QString &line : text.split('\n')) {
+                    const int lineW = fm.horizontalAdvance(line);
+                    path.addText(area.center().x() - lineW / 2.0, lineY, font, line);
+                    lineY += fm.lineSpacing();
+                }
+                ip.setPen(QPen(QColor(0, 0, 0, 170), qMax(2.0, h * 0.05)));
+                ip.setBrush(Qt::white);
+                ip.drawPath(path);
+                ip.setPen(Qt::NoPen);
+                ip.drawPath(path);
+            }
+        }
+        ip.end();
+    }
+
     void triggerScale() {
         if (!m_lastRawFrame.isValid()) return;
-        if (!m_isProcessing.testAndSetRelaxed(0, 1)) return;
+        if (!m_isProcessing.testAndSetRelaxed(0, 1)) {
+            m_pendingRescale.storeRelaxed(1);
+            return;
+        }
 
         QRect tr = calculateTargetRect();
         QSize targetSize = tr.size();
@@ -78,8 +140,9 @@ public:
             m_isProcessing = 0;
             return;
         }
+        const QList<FilterObject> filtersSnapshot = filterObjects;
 
-        (void)QtConcurrent::run(QThreadPool::globalInstance(), [this, targetSize]() {
+        (void)QtConcurrent::run(QThreadPool::globalInstance(), [this, targetSize, filtersSnapshot]() {
             QVideoFrame localFrame;
             {
                 QMutexLocker locker(&m_frameMutex);
@@ -95,28 +158,21 @@ public:
             const int sourceWidth = sourceImage.width();
             const int sourceHeight = sourceImage.height();
             QImage img = sourceImage.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            
+            compositeFilters(img, filtersSnapshot);
+
             {
                 QMutexLocker locker(&m_frameMutex);
                 lastFrame = img;
             }
-            
+
             m_isProcessing = 0;
             QMetaObject::invokeMethod(this, [this, sourceWidth, sourceHeight]() {
                 setProperty("actualWidth", sourceWidth);
                 setProperty("actualHeight", sourceHeight);
                 update();
+                if (m_pendingRescale.fetchAndStoreRelaxed(0)) triggerScale();
             }, Qt::QueuedConnection);
         });
-    }
-
-    void addFilter(int mode) {
-        FilterObject obj = {0.4f, 0.4f, 0.6f, 0.6f, mode};
-        filterObjects.append(obj);
-        selectedFilterIdx = filterObjects.size() - 1;
-        adjustingFilter = true;
-        update();
-        emit filtersChanged(filterObjects);
     }
 
     void setPlaceholderState(const QString &title, const QString &body) {
@@ -160,6 +216,8 @@ public:
 signals:
     void cropsChanged(float t, float b, float l, float r);
     void filtersChanged(QList<VideoWithCropWidget::FilterObject> filters);
+    void filterSelectionChanged(int index);
+    void overlayDropped(int type);
 
 protected:
     void resizeEvent(QResizeEvent* event) override {
@@ -167,18 +225,17 @@ protected:
         triggerScale(); // Re-scale immediately on resize (fullscreen/window resize)
     }
 
-    // --- DELETE LOGIC ---
-    void keyPressEvent(QKeyEvent* event) override {
-        if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && adjustingFilter) {
-            if (selectedFilterIdx >= 0 && selectedFilterIdx < filterObjects.size()) {
-                filterObjects.removeAt(selectedFilterIdx);
-                selectedFilterIdx = -1;
-                adjustingFilter = false;
-                update();
-                emit filtersChanged(filterObjects);
-            }
+    void dragEnterEvent(QDragEnterEvent *event) override {
+        if (event->mimeData()->hasFormat("application/x-potato-overlay")) {
+            event->acceptProposedAction();
         }
-        QWidget::keyPressEvent(event);
+    }
+
+    void dropEvent(QDropEvent *event) override {
+        if (event->mimeData()->hasFormat("application/x-potato-overlay")) {
+            emit overlayDropped(event->mimeData()->data("application/x-potato-overlay").toInt());
+            event->acceptProposedAction();
+        }
     }
 
     void paintEvent(QPaintEvent*) override {
@@ -213,30 +270,9 @@ protected:
 
         QRect tr = calculateTargetRect();
         const QRect imageRect = displayedFrameRect(tr, frameToDraw);
-        
-        if (!filterObjects.isEmpty()) {
-            QPainter ip(&frameToDraw);
-            for(const auto& obj : filterObjects) {
-                int x = obj.l * frameToDraw.width();
-                int y = obj.t * frameToDraw.height();
-                int w = (obj.r - obj.l) * frameToDraw.width();
-                int h = (obj.b - obj.t) * frameToDraw.height();
-                QRect area(x, y, w, h);
-                if (w <= 0 || h <= 0) continue;
 
-                if (obj.mode == 0 || obj.mode == 1) {
-                    QImage sub = frameToDraw.copy(area);
-                    int scale = (obj.mode == 0) ? 10 : 30;
-                    QImage small = sub.scaled(qMax(1, w/scale), qMax(1, h/scale), Qt::IgnoreAspectRatio, Qt::FastTransformation);
-                    QImage blurred = small.scaled(w, h, Qt::IgnoreAspectRatio, (obj.mode == 0 ? Qt::SmoothTransformation : Qt::FastTransformation));
-                    ip.drawImage(x, y, blurred);
-                } else {
-                    ip.fillRect(area, Qt::black);
-                }
-            }
-            ip.end();
-        }
-
+        // NOTE: frameToDraw already has blur/pixelate/blackout boxes baked in by the
+        // background worker (see triggerScale/compositeFilters) so painting stays cheap.
         p.drawImage(imageRect.topLeft(), frameToDraw);
 
         const int cropX = imageRect.x() + qRound(cropL * imageRect.width());
@@ -314,6 +350,7 @@ protected:
             selectedFilterIdx = i;
             adjustingFilter = true;
             lastMousePos = QPointF(static_cast<float>(p.x() - tr.x())/tr.width(), static_cast<float>(p.y() - tr.y())/tr.height());
+            emit filterSelectionChanged(selectedFilterIdx);
             update();
             return;
         }
@@ -328,12 +365,14 @@ protected:
         else {
             activeEdge = None;
             selectedFilterIdx = -1; // Deselect if clicking background
+            emit filterSelectionChanged(-1);
             update();
             return;
         }
 
         selectedFilterIdx = -1;
         adjustingFilter = false;
+        emit filterSelectionChanged(-1);
         lastMousePos = QPointF(static_cast<float>(p.x() - tr.x())/tr.width(), static_cast<float>(p.y() - tr.y())/tr.height());
         update();
     }
@@ -367,10 +406,17 @@ protected:
             lastMousePos = QPointF(curX, curY);
         }
         update();
-        if (adjustingFilter) emit filtersChanged(filterObjects);
-        else emit cropsChanged(cropT, cropB, cropL, cropR);
+        if (adjustingFilter) {
+            triggerScale();
+            emit filtersChanged(filterObjects);
+        } else {
+            emit cropsChanged(cropT, cropB, cropL, cropR);
+        }
     }
-    void mouseReleaseEvent(QMouseEvent*) override { activeEdge = None; }
+    void mouseReleaseEvent(QMouseEvent*) override {
+        if (adjustingFilter) triggerScale();
+        activeEdge = None;
+    }
 };
 
 #endif

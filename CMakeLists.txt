@@ -36,6 +36,8 @@ add_executable(PotatoEditor
         src/Main/updater.cpp
         src/Includes/previewLabel.h
         src/Main/previewLabel.cpp
+        src/Includes/icons.h
+        src/Includes/dragToolButton.h
 )
 
 if(WIN32)

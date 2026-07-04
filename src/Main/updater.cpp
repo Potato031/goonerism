@@ -155,9 +155,9 @@ void MainWindow::finalizeUpdate() {
             << "cd \"" << folderDir << "\"\n"
             << "chmod +x update.AppImage\n"
             // Use quotes in case there are spaces in the user's directory name
-            << "mv \"update.AppImage\" \"PotatoEditor_linux.AppImage\"\n"
-            << "chmod +x \"PotatoEditor_linux.AppImage\"\n"
-            << "./\"PotatoEditor_linux.AppImage\" &\n"
+            << "mv \"update.AppImage\" \"potatoeditor.AppImage\"\n"
+            << "chmod +x \"potatoeditor.AppImage\"\n"
+            << "./\"potatoeditor.AppImage\" &\n"
             << "rm -- \"$0\"\n";
         shFile.close();
 

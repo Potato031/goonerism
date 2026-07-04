@@ -10,28 +10,26 @@
 #include "../Includes/timelinewidget.h"
 #include "../Includes/appsettings.h"
 
-void TimelineWidget::showProgressNotification(QProcess* process, qint64 totalMs) {
+// Streams ffmpeg's -progress output into the editor UI (progress bar in the
+// timeline header) instead of a floating toast window.
+void TimelineWidget::showProgressNotification(QProcess* process, qint64 totalMs, bool showCompletionToast) {
+    Q_UNUSED(showCompletionToast);
     process->setProcessChannelMode(QProcess::MergedChannels);
 
-    ProgressBarNotification *notif = new ProgressBarNotification("COPYING");
-    notif->show();
+    emit exportStarted("EXPORTING");
 
-    connect(process, &QProcess::readyRead, this, [=]() {
+    connect(process, &QProcess::readyRead, this, [this, process, totalMs]() {
         QString data = process->readAll();
         static QRegularExpression re("out_time_us=(\\d+)");
-        auto match = re.match(data);
+        QRegularExpressionMatch match;
+        // Take the LAST progress line in this chunk so the bar never jumps backwards.
+        auto it = re.globalMatch(data);
+        while (it.hasNext()) match = it.next();
         if (match.hasMatch()) {
             qint64 currentUs = match.captured(1).toLongLong();
-            int progress = qBound(0, static_cast<int>((currentUs / 1000.0) / totalMs * 100), 100);
-            notif->setProgress(progress);
+            int progress = qBound(0, static_cast<int>((currentUs / 1000.0) / qMax<qint64>(1, totalMs) * 100), 100);
+            emit exportProgress(progress);
         }
-    });
-
-    connect(process, &QProcess::finished, this, [=](int exitCode) {
-        notif->close();
-        notif->deleteLater();
-        if(exitCode == 0) showNotification("COPIED");
-        else showNotification("EXPORT FAILED ❌");
     });
 }
 

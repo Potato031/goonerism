@@ -12,6 +12,41 @@ void TimelineWidget::mousePressEvent(QMouseEvent* e) {
     activeEdge = None;
     activeSegmentIdx = -1;
     isScrubbing = false;
+    overlayDrag = OvNone;
+    overlayDragIdx = -1;
+
+    // --- Overlay lanes take priority: they sit above the video track ---
+    {
+        OverlayDragMode ovEdge;
+        const int ovIdx = overlayIndexAt(e->pos(), &ovEdge);
+        if (ovIdx != -1) {
+            selectedOverlayIdx = ovIdx;
+
+            if (e->button() == Qt::RightButton) {
+                QMenu menu(this);
+                menu.setObjectName("TimelineContextMenu");
+                QAction *editAction = overlays[ovIdx].type == 3 ? menu.addAction("Edit text…") : nullptr;
+                QAction *deleteAction = menu.addAction("Delete overlay");
+                QAction *chosen = menu.exec(e->globalPosition().toPoint());
+                if (chosen && chosen == deleteAction) deleteSelectedOverlay();
+                else if (chosen && editAction && chosen == editAction) emit requestEditTextOverlay(ovIdx);
+                update();
+                return;
+            }
+
+            saveState();
+            overlayDrag = ovEdge;
+            overlayDragIdx = ovIdx;
+            overlayDragGrabOffsetMs = clickTime - overlays[ovIdx].startMs;
+            update();
+            emit overlaysChanged();
+            return;
+        }
+        if (selectedOverlayIdx != -1 && e->pos().y() < videoTrackTop()) {
+            selectedOverlayIdx = -1;
+            emit overlaysChanged();
+        }
+    }
 
     int clickedIdx = -1;
     for (int i = 0; i < segments.size(); ++i) {
@@ -77,14 +112,15 @@ void TimelineWidget::showClipContextMenu(const QPoint &globalPos, qint64 clickTi
 
     QAction *splitAction = menu.addAction("Split clip here");
     menu.addSeparator();
-    QAction *blurAction = menu.addAction("Add blur box to this clip");
-    QAction *pixelAction = menu.addAction("Add pixelate box to this clip");
-    QAction *blackoutAction = menu.addAction("Add blackout box to this clip");
+    QAction *blurAction = menu.addAction("Add blur overlay here");
+    QAction *pixelAction = menu.addAction("Add pixelate overlay here");
+    QAction *blackoutAction = menu.addAction("Add blackout overlay here");
+    QAction *textAction = menu.addAction("Add text overlay here");
     menu.addSeparator();
-    QAction *applyClipAction = menu.addAction("Apply current crop + filters to clip");
-    QAction *applyAllAction = menu.addAction("Apply current crop + filters to all clips");
-    QAction *clearClipAction = menu.addAction("Clear clip crop + filters");
-    QAction *clearAllAction = menu.addAction("Clear all clip crop + filters");
+    QAction *applyClipAction = menu.addAction("Apply current crop to clip");
+    QAction *applyAllAction = menu.addAction("Apply current crop to all clips");
+    QAction *clearClipAction = menu.addAction("Clear clip crop");
+    QAction *clearAllAction = menu.addAction("Clear all clip crops");
 
     QAction *chosen = menu.exec(globalPos);
     if (!chosen) return;
@@ -96,13 +132,9 @@ void TimelineWidget::showClipContextMenu(const QPoint &globalPos, qint64 clickTi
         return;
     }
 
-    if (chosen == blurAction || chosen == pixelAction || chosen == blackoutAction) {
-        if (clickedIdx >= 0 && clickedIdx < segments.size()) {
-            selectedSegmentIdx = clickedIdx;
-            selectedSegmentIndices.clear();
-            emitVisualStateForCurrentContext();
-            emit requestAddFilter(chosen == blurAction ? 0 : chosen == pixelAction ? 1 : 2);
-        }
+    if (chosen == blurAction || chosen == pixelAction || chosen == blackoutAction || chosen == textAction) {
+        const int type = chosen == blurAction ? 0 : chosen == pixelAction ? 1 : chosen == blackoutAction ? 2 : 3;
+        addOverlayAt(type, qBound(0LL, clickTime, durationMs));
         return;
     }
 
@@ -120,6 +152,36 @@ void TimelineWidget::showClipContextMenu(const QPoint &globalPos, qint64 clickTi
 void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
     const int drawX = e->position().x() - sidebarWidth + scrollOffset;
     const double pxPerMs = static_cast<double>(width() - sidebarWidth) * zoomFactor / durationMs;
+
+    // --- Overlay clip drag: move / trim on its lane ---
+    if (overlayDrag != OvNone && overlayDragIdx >= 0 && overlayDragIdx < overlays.size()) {
+        auto &ov = overlays[overlayDragIdx];
+        const qint64 mouseTime = qBound<qint64>(0, static_cast<qint64>(drawX / pxPerMs), durationMs);
+        const qint64 minLen = 150;
+
+        if (overlayDrag == OvMove) {
+            const qint64 len = ov.endMs - ov.startMs;
+            ov.startMs = qBound<qint64>(0, mouseTime - overlayDragGrabOffsetMs, durationMs - len);
+            ov.endMs = ov.startMs + len;
+        } else if (overlayDrag == OvStart) {
+            ov.startMs = qBound<qint64>(0, mouseTime, ov.endMs - minLen);
+        } else if (overlayDrag == OvEnd) {
+            ov.endMs = qBound<qint64>(ov.startMs + minLen, mouseTime, durationMs);
+        }
+        update();
+        emit overlaysChanged();
+        return;
+    }
+
+    if (e->buttons() == Qt::NoButton && e->pos().y() < videoTrackTop()) {
+        OverlayDragMode hoverEdge;
+        if (overlayIndexAt(e->pos(), &hoverEdge) != -1) {
+            setCursor(hoverEdge == OvMove ? Qt::OpenHandCursor : Qt::SizeHorCursor);
+        } else {
+            setCursor(Qt::ArrowCursor);
+        }
+        return;
+    }
 
     if (isSelecting) {
         selectionRect.setBottomRight(e->pos());
@@ -213,6 +275,12 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
 }
 
 void TimelineWidget::mouseReleaseEvent(QMouseEvent* e) {
+    if (overlayDrag != OvNone) {
+        overlayDrag = OvNone;
+        overlayDragIdx = -1;
+        emit overlaysChanged();
+    }
+
     if (activeEdge != None) {
         saveState();
         emit clipTrimmed();
@@ -267,6 +335,7 @@ void TimelineWidget::wheelEvent(QWheelEvent *e) {
         zoomFactor = qBound(1.0, zoomFactor * (e->angleDelta().y() > 0 ? 1.15 : 1.0/1.15), 100.0);
         int mouseX = e->position().x() - sidebarWidth;
         scrollOffset = (static_cast<double>(scrollOffset + mouseX) / oldZoom * zoomFactor) - mouseX;
+        emit zoomChanged(zoomFactor);
     } else {
         scrollOffset += (e->angleDelta().y() > 0 ? -120 : 120);
     }

@@ -12,6 +12,8 @@ class PreviewLabel : public QLabel {
     Q_OBJECT
 public:
     explicit PreviewLabel(const QString &videoPath, QWidget *parent = nullptr);
+    void setSource(const QString &videoPath);
+    QString source() const { return path; }
 
 protected:
     void enterEvent(QEnterEvent *event) override;

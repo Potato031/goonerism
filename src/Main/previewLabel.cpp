@@ -57,6 +57,15 @@ PreviewLabel::PreviewLabel(const QString &videoPath, QWidget *parent)
     generatePreview();
 }
 
+// Re-points a recycled media-bin row at a different file.
+void PreviewLabel::setSource(const QString &videoPath) {
+    if (path == videoPath) return;
+    path = videoPath;
+    isAudioFile = MediaUtils::isKnownAudioFile(path);
+    filmstrip = QPixmap();
+    generatePreview();
+}
+
 void PreviewLabel::generatePreview() {
     if (isAudioFile) {
         renderAudioPlaceholder();

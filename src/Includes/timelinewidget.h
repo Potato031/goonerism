@@ -23,41 +23,6 @@
 
 class QProcess;
 
-// Helper UI for the top-right progress tracking
-class ProgressBarNotification : public QWidget {
-    Q_OBJECT
-public:
-    explicit ProgressBarNotification(const QString &title, QWidget *parent = nullptr) : QWidget(nullptr) {
-        setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
-        setAttribute(Qt::WA_TranslucentBackground);
-
-        auto *lay = new QVBoxLayout(this);
-        auto *bg = new QWidget(this);
-        // --- NEW: Remove setStyleSheet, add ObjectName ---
-        bg->setObjectName("ProgressNotificationBg");
-
-        auto *inner = new QVBoxLayout(bg);
-        label = new QLabel(title, this);
-        label->setObjectName("ProgressNotificationLabel");
-
-        bar = new QProgressBar(this);
-        bar->setObjectName("ProgressNotificationBar");
-        bar->setRange(0, 100);
-
-        inner->addWidget(label);
-        inner->addWidget(bar);
-        lay->addWidget(bg);
-        adjustSize();
-        QScreen *screen = QGuiApplication::primaryScreen();
-        move(screen->availableGeometry().topRight() - QPoint(width() + 20, -20));
-    }
-    void setProgress(int value) { bar->setValue(value); }
-
-private:
-    QProgressBar *bar;
-    QLabel *label;
-};
-
 class TimelineWidget : public QWidget {
     Q_OBJECT
     Q_PROPERTY(QColor accentColor MEMBER m_accentColor)
@@ -67,15 +32,6 @@ class TimelineWidget : public QWidget {
    Q_PROPERTY(QColor waveformColor MEMBER m_waveformColor)
 public slots:
     void updateCropValues(float t, float b, float l, float r);
-
-    void updateFilterValues(float t, float b, float l, float r, int mode, bool enabled) {
-        filterT = t;
-        filterB = b;
-        filterL = l;
-        filterR = r;
-        currentFilter = mode;
-        filterEnabled = enabled;
-    }
 public:
     struct AutoCutSettings {
         double silenceThresholdDb = -45.0;
@@ -105,8 +61,9 @@ public:
 
     // 1. Move Segment inside the class to fix scoping errors
     struct Segment {
-        qint64 startMs;
-        qint64 endMs;
+        qint64 startMs;         // timeline time
+        qint64 endMs;           // timeline time
+        int sourceIdx = 0;      // which entry in `sources` this segment plays from
         float volume = 1.0f;
         float pitch = 1.0f;
         bool muted = false;
@@ -115,24 +72,32 @@ public:
         float cropBottom = 1.0f;
         float cropLeft = 0.0f;
         float cropRight = 1.0f;
-        QList<VideoWithCropWidget::FilterObject> filters;
     };
 
-    struct TextSegment {
-        QString text;
-        qint64 startMs;
-        qint64 durationMs; // Length of the text clip
-        int trackIndex = 0; // In case you want multiple text layers
+    // A media file placed on the timeline. sources[0] is the primary file;
+    // additional files appended by dropping them onto the timeline follow it.
+    struct SourceClip {
+        QString path;
+        qint64 offsetMs = 0;    // where this source's t=0 sits on the timeline
+        qint64 durationMs = 0;
+        qint64 fileSizeBytes = 0;
+        bool hasVideo = true;
+        bool hasAudio = true;
     };
 
-    QList<TextSegment> textSegments;
-    int selectedTextIdx = -1;
-    bool isDraggingText = false;
-    int textTrackY = 40;
-    int textTrackHeight = 30;
-    int dragStartMouseX = 0;
-    qint64 dragStartMs = 0;
-    qint64 dragStartDurationMs = 0;
+    // A time-ranged effect clip that lives on its own lane above the video
+    // track (blur / pixelate / blackout region, or a text overlay).
+    struct OverlayClip {
+        int type = 0;           // 0 blur, 1 pixelate, 2 blackout, 3 text
+        qint64 startMs = 0;     // timeline time
+        qint64 endMs = 0;
+        float l = 0.4f, t = 0.4f, r = 0.6f, b = 0.6f; // region on the video, normalized
+        QString text;           // only for type 3
+    };
+
+    QList<SourceClip> sources;
+    QList<OverlayClip> overlays;
+    int selectedOverlayIdx = -1;
 
     explicit TimelineWidget(QWidget* parent = nullptr);
 
@@ -147,23 +112,48 @@ public:
     float audioGain = 1.0f;
     float verticalCropLimit = 1.0f;
     float cropTop = 0.0f, cropBottom = 1.0f, cropLeft = 0.0f, cropRight = 1.0f;
-
-    float filterL = 0.1f;
-    float filterR = 0.3f;
-    float filterT = 0.1f;
-    float filterB = 0.3f;
-    int currentFilter = 0;
-    bool filterEnabled = false;
     void undo();
     void redo();
     void splitAtPlayhead();
+    void requestSplit() { saveState(); splitAtPlayhead(); }
     void deleteSelectedSegment();
+    void deleteActiveSelection();
     void validatePlayheadPosition();
     void autoCutSilence();
+    bool handleGlobalKey(QKeyEvent *event);
+
+    // --- Overlay clips (effect/text lanes above the video track) ---
+    void addOverlayAt(int type, qint64 timeMs);
+    void addOverlayAtPlayhead(int type) { addOverlayAt(type, currentPosMs); }
+    void deleteSelectedOverlay();
+    QList<int> overlaysAtTime(qint64 timeMs) const;
+    QVector<int> computeOverlayLanes() const;
+    int overlayLaneCount() const;
+
+    // --- Multi-source timeline ---
+    void appendMediaSource(const QString &path);
+    int sourceIndexForTimelineTime(qint64 timeMs) const;
+    qint64 sourceOffsetMs(int sourceIdx) const {
+        return (sourceIdx >= 0 && sourceIdx < sources.size()) ? sources[sourceIdx].offsetMs : 0;
+    }
+
+    // Metadata for the header chips
+    double estimatedExportSizeMB() const;
+    QString currentAudioTrackName() const {
+        return (currentAudioTrack < trackNames.size())
+                   ? trackNames[currentAudioTrack]
+                   : QString("Track %1").arg(currentAudioTrack + 1);
+    }
+
+    // Content height for the surrounding scroll area (grows with overlay lanes)
+    void relayout();
     qint64 getStartLimit() const;
     QString getMediaFilePath() const { return currentFileUrl.toLocalFile(); }
     qint64 getEndLimit() const;
     void forceFitToDuration();
+    double getZoomFactor() const { return zoomFactor; }
+    void setZoomFactor(double z);
+    void resetZoomView();
     void copyTrimmedVideo();
     void copyTrimmedAudio();
     void copyTrimmedGif();
@@ -178,11 +168,10 @@ public:
     void setPlaybackSettings(const PlaybackSettings &settings) { playbackSettings = settings; }
     ExportSettings getExportSettings() const { return exportSettings; }
     void setExportSettings(const ExportSettings &settings) { exportSettings = settings; }
-    void setCurrentFilters(const QList<VideoWithCropWidget::FilterObject> &filters);
     void applyCurrentVisualsToSelection(bool allSegments);
     void clearVisualsForSelection(bool allSegments);
-    bool visualStateForCurrentContext(float &t, float &b, float &l, float &r,
-                                      QList<VideoWithCropWidget::FilterObject> &filters) const;
+    bool visualStateForCurrentContext(float &t, float &b, float &l, float &r) const;
+    static void showNotification(const QString &message);
     QColor m_accentColor = QColor("#3D5AFE"); // Defaults in case QSS fails
     QColor m_secondaryColor = QColor("#FF3232");
     QColor m_backgroundColor = QColor("#080809");
@@ -206,8 +195,14 @@ signals:
     void audioTrackChanged(int index);
     void requestAudioTrackChange(int index);
     void mediaProbingFinished();
-    void visualStateChanged(float t, float b, float l, float r, QList<VideoWithCropWidget::FilterObject> filters);
-    void requestAddFilter(int mode);
+    void visualStateChanged(float t, float b, float l, float r);
+    void zoomChanged(double zoomFactor);
+    void overlaysChanged();
+    void requestEditTextOverlay(int index);
+    void sourceAppended(const QString &path);
+    void exportStarted(const QString &label);
+    void exportProgress(int percent);
+    void exportFinished(bool success, const QString &message);
 protected:
     void paintEvent(QPaintEvent* event) override;
 
@@ -215,9 +210,13 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void leaveEvent(QEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dragMoveEvent(QDragMoveEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
 
     void showEvent(QShowEvent* event) override {
         QWidget::showEvent(event);
@@ -234,6 +233,7 @@ protected:
 private:
     struct TimelineState {
         QList<Segment> segments;
+        QList<OverlayClip> overlays;
     };
 
     QList<Segment> segments;
@@ -241,11 +241,25 @@ private:
     QList<TimelineState> redoStack;
     const int MAX_STACK_SIZE = 50;
 
+    // Overlay lane geometry + drag state
+    static constexpr int overlayLaneHeight = 20;
+    static constexpr int overlayLaneGap = 3;
+    int overlayLanesTop() const { return rulerHeight + 8; }
+    int videoTrackTop() const;
+    enum OverlayDragMode { OvNone, OvMove, OvStart, OvEnd };
+    OverlayDragMode overlayDrag = OvNone;
+    int overlayDragIdx = -1;
+    qint64 overlayDragGrabOffsetMs = 0;
+    int overlayIndexAt(const QPoint &pos, OverlayDragMode *edge = nullptr) const;
+
     void saveState();
 
     QMediaPlayer* thumbPlayer;
     QVideoSink* videoSink;
     QMap<int, QImage> thumbnailCache;
+    // Filmstrip images (10 tiled frames) for appended sources, keyed by source index
+    QMap<int, QImage> sourceFilmstrips;
+    void ensureSourceFilmstrip(int sourceIdx);
     QQueue<int> thumbnailRequestQueue;
     bool thumbnailRequestActive = false;
     QVector<float> audioSamples;
@@ -279,9 +293,9 @@ private:
         "All audio", "All discord audio + mic", "Only discord audio",
         "Chromium + mic", "WEBRTC VoiceEngine + mic", "everything excluding discord", "Chromium only", "WEBRTC VoiceEngine only"
     };
-    QList<VideoWithCropWidget::FilterObject> currentFilters;
 
     void loadAudioFast(const QString &path);
+    void appendAudioWaveform(const QString &path);
     void processVideoFrame(const QVideoFrame &frame);
     void requestTimelineThumbnails();
     void requestNextTimelineThumbnail();
@@ -292,8 +306,7 @@ private:
     void showClipContextMenu(const QPoint &globalPos, qint64 clickTime, int clickedIdx);
 
 
-    static void showNotification(const QString &message);
-    void showProgressNotification(QProcess* process, qint64 totalMs);
+    void showProgressNotification(QProcess* process, qint64 totalMs, bool showCompletionToast = true);
     void detectAudioTracks(const QString &path);
     void resetMediaState();
 

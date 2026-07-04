@@ -28,9 +28,14 @@
 #include <QSplitter>
 #include <QCloseEvent>
 #include <QStringList>
+#include <QIcon>
 
 class QHBoxLayout;
 class QShortcut;
+class QMenu;
+class QComboBox;
+class QAction;
+class QProgressBar;
 
 
 class MainWindow : public QMainWindow {
@@ -44,13 +49,13 @@ public:
         int notificationDurationMs = 2000;
         QString notificationPosition = "top-right";
         int updateCheckDelayMs = 2000;
-        QString windowTitle = "Potato Editor";
-        QString logoPrimaryText = "POTATOES";
-        QString logoSecondaryText = "QUICK ONE";
-        QString importButtonText = "IMPORT MEDIA";
+        QString windowTitle = "Potato Studio";
+        QString logoPrimaryText = "POTATO";
+        QString logoSecondaryText = "STUDIO";
+        QString importButtonText = "IMPORT";
         int sidebarWidth = 260;
         QString sidebarPosition = "left";
-        QString toolButtonOrder = "blur,pixel,blackout,autocut,settings,resetcrop";
+        QString toolButtonOrder = "text,blur,pixel,blackout,autocut,settings,resetcrop";
         float defaultCropTop = 0.03f;
         float defaultCropBottom = 0.96f;
         float defaultCropLeft = 0.0f;
@@ -60,32 +65,32 @@ public:
         QString emptyTransportHint = "SPACE PLAY/PAUSE | S SPLIT | CTRL+C EXPORT";
         QString videoTransportHint = "SPACE PLAY/PAUSE | S SPLIT | CTRL+C EXPORT VIDEO";
         QString audioTransportHint = "SPACE PLAY/PAUSE | S SPLIT | CTRL+SHIFT+C EXPORT AUDIO";
-        QString timelineAccentColor = "#FF875F";
-        QString timelineSecondaryColor = "#FF6B4A";
-        QString timelineBackgroundColor = "#14181D";
-        QString timelineTrackColor = "#272C34";
-        QString timelineWaveformColor = "#7D5F56";
-        QString previewAccentColor = "#FF875F";
-        QString previewSecondaryColor = "#FF6B4A";
-        QString previewBackgroundColor = "#0F1115";
-        QString appBackgroundStartColor = "#111317";
-        QString appBackgroundEndColor = "#0F1115";
-        QString panelSurfaceColor = "#1A1D23";
-        QString panelAltSurfaceColor = "#1D2128";
-        QString controlSurfaceColor = "#22272F";
-        QString controlHoverColor = "#2D333D";
-        QString borderColor = "#2A3038";
-        QString primaryTextColor = "#F1F4F7";
-        QString mutedTextColor = "#C6CDD5";
-        QString sectionLabelColor = "#D6DCE3";
-        QString logoPrimaryColor = "#F4F6F8";
-        QString logoSecondaryColor = "#FF9B77";
+        QString timelineAccentColor = "#FF7A50";
+        QString timelineSecondaryColor = "#FF5C33";
+        QString timelineBackgroundColor = "#121217";
+        QString timelineTrackColor = "#26262E";
+        QString timelineWaveformColor = "#7A8B99";
+        QString previewAccentColor = "#FF7A50";
+        QString previewSecondaryColor = "#FF5C33";
+        QString previewBackgroundColor = "#08080A";
+        QString appBackgroundStartColor = "#0F0F13";
+        QString appBackgroundEndColor = "#0D0D11";
+        QString panelSurfaceColor = "#17171C";
+        QString panelAltSurfaceColor = "#1D1D24";
+        QString controlSurfaceColor = "#25252D";
+        QString controlHoverColor = "#2E2E38";
+        QString borderColor = "#3C3C4A";
+        QString primaryTextColor = "#EFEFF4";
+        QString mutedTextColor = "#9C9CA8";
+        QString sectionLabelColor = "#8B8B97";
+        QString logoPrimaryColor = "#FFFFFF";
+        QString logoSecondaryColor = "#FF7A50";
         QString appFontFamily = "Sans Serif";
-        int appFontPointSize = 13;
-        int logoFontPointSize = 20;
-        int mediaBadgeFontPointSize = 10;
+        int appFontPointSize = 12;
+        int logoFontPointSize = 18;
+        int mediaBadgeFontPointSize = 9;
         int metaFontPointSize = 11;
-        int panelCornerRadius = 12;
+        int panelCornerRadius = 10;
         int buttonCornerRadius = 6;
         QString keyPlayPause = "Space";
         QString keySplit = "S";
@@ -106,7 +111,7 @@ public:
 
     MainWindow(QWidget *parent = nullptr);
     EditorSettings getEditorSettings() const { return editorSettings; }
-    const QString CURRENT_VERSION = "1.1.4";
+    const QString CURRENT_VERSION = "1.2.0";
     void downloadUpdate(const QString &url);
     void finalizeUpdate();
     void checkForUpdates();
@@ -132,9 +137,17 @@ private:
     void loadEditorSettings();
     void saveEditorSettings() const;
     void applyEditorSettings();
-    void applyStoredFilters();
     void applyToolButtonOrder();
+    void applyIcons();
+    void saveSnapshot();
+    void showShortcutsDialog();
     QString buildAppStyleSheet() const;
+    // Overlay clip <-> preview sync (regions shown/edited on the video)
+    void syncOverlaysToPreview();
+    void editTextOverlay(int index);
+    // Multi-source playback: seek in timeline time, switching files as needed
+    void seekTimeline(qint64 timelinePosMs);
+    void updateTimelineChips();
     QLineEdit* exportInput;
     QVBoxLayout* mainLayout;
     QFrame* toolbar;
@@ -159,15 +172,46 @@ private:
     QPushButton* autoCutBtn;
     QPushButton* settingsBtn;
     QPushButton* resetCropBtn;
+    // Transport / toolbar controls
+    QFrame* transportBar;
+    QPushButton* jumpBackBtn;
+    QPushButton* stepBackBtn;
+    QPushButton* stepFwdBtn;
+    QPushButton* jumpFwdBtn;
+    QPushButton* muteBtn;
+    QPushButton* snapshotBtn;
+    QComboBox* speedBox;
+    QPushButton* exportBtn;
+    QMenu* exportMenu;
+    QAction* exportVideoAction;
+    QAction* exportMutedAction;
+    QAction* exportAudioAction;
+    QAction* exportGifAction;
+    QPushButton* helpBtn;
+    QPushButton* sidebarImportBtn;
+    QPushButton* undoBtn;
+    QPushButton* redoBtn;
+    QPushButton* splitBtn;
+    QPushButton* deleteClipBtn;
+    // Cached icons that swap at runtime
+    QIcon playIcon, pauseIcon, volumeIcon, volumeMutedIcon, fullscreenIcon, exitFullscreenIcon;
     QLabel* toolHeaderLabel;
+    QLabel* redactGroupLabel;
+    QLabel* actionsGroupLabel;
     QLabel* logoBoldLabel;
     QLabel* logoLightLabel;
     QLabel* statusLabel;
+    QLabel* audioTrackChip;
+    QLabel* estSizeChip;
     QLabel* currentMediaLabel;
     QLabel* transportHintLabel;
     QLabel* sidebarCountLabel;
     QLabel* sidebarEmptyLabel;
     QSlider* volSlider;
+    QLabel* timecodeLabel;
+    QSlider* timelineZoomSlider;
+    QPushButton* timelineFitBtn;
+    void updateTimecodeDisplay();
     // Media
     QMediaPlayer* player;
     QAudioOutput* audio;
@@ -176,15 +220,24 @@ private:
     QPushButton *blurBtn;
     QPushButton *pixelBtn;
     QPushButton *solidBtn;
+    QPushButton *textBtn;
     QFrame* clipSidebar;
     QScrollArea* sidebarScroll;
     QWidget* sidebarContent;
     QVBoxLayout* sidebarListLayout;
     QString currentMediaPath;
     QStringList cachedRecentFiles;
-    QList<VideoWithCropWidget::FilterObject> persistentFilters;
     EditorSettings editorSettings;
     QShortcut* playPauseShortcut;
+    // Export progress (inline, in the timeline header)
+    QProgressBar* exportProgressBar;
+    // Which overlay each preview region maps to (index into timeline->overlays)
+    QList<int> previewOverlayMap;
+    bool syncingPreview = false;
+    // Multi-source playback state
+    int activeSourceIdx = 0;
+    bool switchingSource = false;
+    qint64 pendingSeekLocalPos = -1;
     // --- NEW HELPER FUNCTIONS ---
     void loadClipDirectly(const QString &filePath);
     void updateSidebar();

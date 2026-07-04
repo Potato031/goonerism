@@ -17,8 +17,16 @@ void TimelineWidget::resetMediaState() {
     initialSegment.cropBottom = cropBottom;
     initialSegment.cropLeft = cropLeft;
     initialSegment.cropRight = cropRight;
-    initialSegment.filters = currentFilters;
     segments.append(initialSegment);
+
+    // A fresh load fully resets the composition: extra sources and overlay
+    // clips belong to the previous timeline, not the new file.
+    sources.clear();
+    sourceFilmstrips.clear();
+    overlays.clear();
+    selectedOverlayIdx = -1;
+    overlayDrag = OvNone;
+    overlayDragIdx = -1;
 
     maxAmplitude = 0.01f;
     durationMs = 0;
@@ -29,26 +37,32 @@ void TimelineWidget::resetMediaState() {
     currentPosMs = 0;
     currentAudioTrack = 0;
     totalAudioTracks = 1;
-    currentFilters.clear();
     hasVideoStream = false;
     hasAudioStream = false;
     isExporting = false;
     thumbnailRequestActive = false;
     thumbnailRequestQueue.clear();
+    emit overlaysChanged();
 }
 
 void TimelineWidget::setMediaSource(const QUrl &url) {
     currentFileUrl = url;
     resetMediaState();
 
+    SourceClip primary;
+    primary.path = url.toLocalFile();
+    primary.offsetMs = 0;
+    sources.append(primary);
+
     const QFile file(url.toLocalFile());
     originalFileSize = file.size();
+    if (!sources.isEmpty()) sources[0].fileSizeBytes = originalFileSize;
 
     thumbPlayer->setSource(url);
     // detectAudioTracks is now async and will trigger loadAudioFast when done
     detectAudioTracks(url.toLocalFile());
 
-    this->updateGeometry();
+    this->relayout();
     this->update();
 }
 
@@ -82,6 +96,11 @@ void TimelineWidget::setDuration(qint64 duration) {
     this->durationMs = duration;
     this->zoomFactor = 1.0;
     this->scrollOffset = 0;
+    if (!sources.isEmpty()) {
+        sources[0].durationMs = duration;
+        sources[0].hasVideo = hasVideoStream;
+        sources[0].hasAudio = hasAudioStream;
+    }
 
     // Stretch the placeholder to the real duration
     if (segments.isEmpty()) {
@@ -94,7 +113,7 @@ void TimelineWidget::setDuration(qint64 duration) {
     }
 
     // Force a layout recalculation and a repaint
-    this->updateGeometry();
+    this->relayout();
     this->update();
     QTimer::singleShot(100, this, &TimelineWidget::requestTimelineThumbnails);
 }
