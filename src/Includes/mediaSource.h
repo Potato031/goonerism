@@ -17,6 +17,7 @@
 #include <QMimeData>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include "overlayShapes.h"
 
 class VideoWithCropWidget : public QWidget {
     Q_OBJECT
@@ -27,8 +28,16 @@ class VideoWithCropWidget : public QWidget {
 public:
     struct FilterObject {
         float l, t, r, b;
-        int mode;      // 0: Blur, 1: Pixelate, 2: SolidColor, 3: Text
+        int mode;      // 0: Blur, 1: Pixelate, 2: SolidColor, 3: Text, 4: Shape, 5: ColorCorrect
         QString text;  // only used by mode 3
+        // mode 4 (shape/arrow)
+        int shapeKind = 0;
+        QColor shapeColor = QColor(255, 255, 255);
+        int shapeThickness = 4;
+        // mode 5 (color correction)
+        float brightness = 0.0f;
+        float contrast = 1.0f;
+        float saturation = 1.0f;
     };
 
     QVideoSink* sink;
@@ -77,6 +86,30 @@ public:
         });
     }
 
+    // Per-pixel brightness/contrast/saturation, applied in place to a cropped
+    // sub-image (mirrors ffmpeg's eq= filter used for the same overlay at export).
+    static void applyColorCorrection(QImage &img, float brightness, float contrast, float saturation) {
+        if (qFuzzyIsNull(brightness) && qFuzzyCompare(contrast, 1.0f) && qFuzzyCompare(saturation, 1.0f)) return;
+        img = img.convertToFormat(QImage::Format_ARGB32);
+        const int h = img.height();
+        const int w = img.width();
+        for (int y = 0; y < h; ++y) {
+            auto *line = reinterpret_cast<QRgb *>(img.scanLine(y));
+            for (int x = 0; x < w; ++x) {
+                const QRgb px = line[x];
+                int r = qRed(px), g = qGreen(px), b = qBlue(px);
+                r = qBound(0, qRound((r - 128) * contrast + 128 + brightness * 255), 255);
+                g = qBound(0, qRound((g - 128) * contrast + 128 + brightness * 255), 255);
+                b = qBound(0, qRound((b - 128) * contrast + 128 + brightness * 255), 255);
+                const double gray = 0.299 * r + 0.587 * g + 0.114 * b;
+                r = qBound(0, qRound(gray + (r - gray) * saturation), 255);
+                g = qBound(0, qRound(gray + (g - gray) * saturation), 255);
+                b = qBound(0, qRound(gray + (b - gray) * saturation), 255);
+                line[x] = qRgba(r, g, b, qAlpha(px));
+            }
+        }
+    }
+
     // PERFORMANCE: baking blur/pixelate/blackout boxes into the frame is expensive
     // (sub-image copy + two scales per box). This must never run on the UI thread's
     // paintEvent, or every repaint during playback (30-60/sec) stalls input handling.
@@ -100,6 +133,12 @@ public:
                 ip.drawImage(x, y, blurred);
             } else if (obj.mode == 2) {
                 ip.fillRect(area, Qt::black);
+            } else if (obj.mode == 4) {
+                OverlayShapes::paint(ip, QRectF(area), obj.shapeKind, obj.shapeColor, obj.shapeThickness);
+            } else if (obj.mode == 5) {
+                QImage sub = target.copy(area);
+                applyColorCorrection(sub, obj.brightness, obj.contrast, obj.saturation);
+                ip.drawImage(x, y, sub);
             } else { // Text overlay: mirrors ffmpeg drawtext (white, dark outline, centered)
                 ip.setRenderHint(QPainter::Antialiasing);
                 ip.setRenderHint(QPainter::TextAntialiasing);

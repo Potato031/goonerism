@@ -19,8 +19,8 @@ add_executable(PotatoEditor
         resources.qrc
         src/Includes/timelinewidget.h
         src/Main/timelinewidget.cpp
-        src/Main/borderlesswindow.cpp
-        src/Includes/borderlesswindow.h
+        src/Includes/titlebar.h
+        src/Main/titlebar.cpp
         src/Main/audio.cpp
         src/Main/mouseEvents.cpp
         src/Main/notification.cpp
@@ -38,6 +38,7 @@ add_executable(PotatoEditor
         src/Main/previewLabel.cpp
         src/Includes/icons.h
         src/Includes/dragToolButton.h
+        src/Includes/overlayShapes.h
 )
 
 if(WIN32)

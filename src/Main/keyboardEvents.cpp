@@ -90,7 +90,7 @@ bool TimelineWidget::handleGlobalKey(QKeyEvent *event) {
         return true;
     }
     if (matchesShortcut(event, editorSettings.keySplit)) {
-        saveState();
+        saveState("Split clip");
         splitAtPlayhead();
         return true;
     }
@@ -101,6 +101,11 @@ bool TimelineWidget::handleGlobalKey(QKeyEvent *event) {
         } else {
             deleteActiveSelection();
         }
+        return true;
+    }
+
+    if (matchesShortcut(event, editorSettings.keyAddMarker)) {
+        toggleMarkerAtPlayhead();
         return true;
     }
 

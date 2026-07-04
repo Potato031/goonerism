@@ -9,11 +9,15 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QTime>
+#include <QImage>
+#include <QPainter>
 #include <functional>
+#include <cmath>
 
 #include "../Includes/timelinewidget.h"
 #include "../Includes/mediaSource.h"
 #include "../Includes/appsettings.h"
+#include "../Includes/overlayShapes.h"
 
 static QString getFFmpegPath() {
 #ifdef Q_OS_WIN
@@ -95,6 +99,33 @@ static QString buildOverlayChain(const QString &inputLabel,
             chain += lastOutput
                    + QString("drawbox=x=%1:y=%2:w=%3:h=%4:color=black:t=fill:").arg(absX).arg(absY).arg(absW).arg(absH)
                    + enable + cur + ";";
+        } else if (ov.type == 5) { // color correction: same crop/process/overlay shape as blur/pixelate
+            const QString base = QString("[%1_b%2]").arg(prefix).arg(step);
+            const QString mask = QString("[%1_m%2]").arg(prefix).arg(step);
+            const QString fx = QString("[%1_f%2]").arg(prefix).arg(step);
+            const QString eq = QString("eq=brightness=%1:contrast=%2:saturation=%3")
+                                    .arg(ov.brightness, 0, 'f', 3).arg(ov.contrast, 0, 'f', 3).arg(ov.saturation, 0, 'f', 3);
+            chain += lastOutput + "split=2" + base + mask + ";"
+                   + mask + QString("crop=%1:%2:%3:%4,").arg(absW).arg(absH).arg(absX).arg(absY) + eq + fx + ";"
+                   + base + fx + QString("overlay=%1:%2:").arg(absX).arg(absY) + enable + cur + ";";
+        } else if (ov.type == 4) { // shape/arrow: no native ffmpeg ellipse/arrow filter, so bake one
+            // frame's worth of the shape to a transparent PNG (matching the live
+            // preview's QPainter rendering exactly) and overlay that image.
+            QImage shapeImg(vidW, vidH, QImage::Format_ARGB32_Premultiplied);
+            shapeImg.fill(Qt::transparent);
+            {
+                QPainter sp(&shapeImg);
+                OverlayShapes::paint(sp, QRectF(absX, absY, absW, absH), ov.shapeKind, ov.shapeColor, ov.shapeThickness);
+            }
+            const QString shapePath = QDir::toNativeSeparators(
+                QDir::tempPath() + QString("/potato_shape_%1_%2.png").arg(prefix).arg(step));
+            shapeImg.save(shapePath, "PNG");
+            QString moviePath = shapePath;
+            moviePath.replace('\\', '/').replace(":", "\\:").replace("'", "\\'");
+
+            const QString shapeSrc = QString("[%1_shp%2]").arg(prefix).arg(step);
+            chain += QString("movie='%1'").arg(moviePath) + shapeSrc + ";";
+            chain += lastOutput + shapeSrc + "overlay=0:0:" + enable + cur + ";";
         } else { // text
             const int fontSize = qMax(14, qRound(vidH * (ov.b - ov.t) * 0.6));
             const double cx = (ov.l + ov.r) / 2.0;
@@ -118,6 +149,40 @@ static QString buildOverlayChain(const QString &inputLabel,
     if (step == 0) return QString("%1null%2;").arg(inputLabel, outputLabel);
     chain += lastOutput + "copy" + outputLabel + ";";
     return chain;
+}
+
+// Video retime for a (possibly ramping) segment speed. Constant speed is an
+// exact setpts scale. A genuine ramp treats speed as a function of source
+// time T (0..D): speed(T) = s0 + k*T where k = (s1-s0)/D. Since output time
+// advances at 1/speed(T) per unit of source time, the output timestamp for a
+// frame at source time T is the closed-form integral out(T) = (1/k)*ln((s0+k*T)/s0).
+static QString buildSpeedSetptsExpr(double speedStart, double speedEnd, double durationSec) {
+    if (qFuzzyCompare(speedStart, speedEnd)) {
+        return QString("setpts=PTS/%1").arg(speedStart, 0, 'f', 6);
+    }
+    const double D = qMax(0.001, durationSec);
+    const double k = (speedEnd - speedStart) / D;
+    return QString("setpts=(%1)*log((%2+(%3)*T)/%2)/TB")
+        .arg(1.0 / k, 0, 'f', 6)
+        .arg(speedStart, 0, 'f', 6)
+        .arg(k, 0, 'f', 6);
+}
+
+// Matches buildSpeedSetptsExpr's math so the silence-fill branch (no source
+// audio) can produce exactly as much silence as the retimed video needs.
+static double retimedDurationSec(double durationSec, double speedStart, double speedEnd) {
+    if (qFuzzyCompare(speedStart, speedEnd)) return durationSec / speedStart;
+    return (durationSec / (speedEnd - speedStart)) * std::log(speedEnd / speedStart);
+}
+
+// A single atempo stage only accepts 0.5..2.0, so extreme speeds are chained.
+static QString chainedAtempo(double speed) {
+    QStringList stages;
+    double remaining = qBound(0.02, speed, 50.0);
+    while (remaining > 2.0) { stages << "atempo=2.0"; remaining /= 2.0; }
+    while (remaining < 0.5) { stages << "atempo=0.5"; remaining /= 0.5; }
+    stages << QString("atempo=%1").arg(remaining, 0, 'f', 6);
+    return stages.join(",");
 }
 
 static QString cropScaleFilter(float cropRight, float cropLeft, float cropBottom, float cropTop, int vidW, int vidH) {
@@ -165,29 +230,62 @@ QString buildSegmentsGraph(const QList<TimelineWidget::Segment> &segments,
         const auto &src = sources[srcIdx];
         const double sLocal = qMax(0.0, (seg.startMs - src.offsetMs) / 1000.0 - (srcIdx == 0 ? seekStart : 0.0));
         const double d = (seg.endMs - seg.startMs) / 1000.0;
+        const bool hasSpeedChange = !(qFuzzyCompare(seg.speedStart, 1.0f) && qFuzzyCompare(seg.speedEnd, 1.0f));
+        const double dOut = hasSpeedChange ? retimedDurationSec(d, seg.speedStart, seg.speedEnd) : d;
 
         filter += QString("[%1:v]trim=start=%2:duration=%3,setpts=PTS-STARTPTS[%4_seg%5];")
                       .arg(srcIdx).arg(sLocal).arg(d).arg(prefix).arg(i);
+        // Overlays are applied here, against the segment's original (pre-retime)
+        // timestamps, so their enable='between(t,a,b)' windows stay correct —
+        // the speed change happens afterward, warping the already-composited stream.
         filter += buildOverlayChain(QString("[%1_seg%2]").arg(prefix).arg(i),
                                     QString("[%1_v%2]").arg(prefix).arg(i),
                                     QString("%1%2").arg(prefix).arg(i),
                                     vidW, vidH,
                                     seg.startMs, seg.endMs,
                                     overlays);
-        filter += QString("[%1_v%2]%3[%1_vx%2];")
-                      .arg(prefix).arg(i)
-                      .arg(cropScaleFilter(seg.cropRight, seg.cropLeft, seg.cropBottom, seg.cropTop, vidW, vidH));
+        QString videoLabel = QString("[%1_v%2]").arg(prefix).arg(i);
+        if (hasSpeedChange) {
+            const QString spedLabel = QString("[%1_sp%2]").arg(prefix).arg(i);
+            filter += videoLabel + buildSpeedSetptsExpr(seg.speedStart, seg.speedEnd, d) + spedLabel + ";";
+            videoLabel = spedLabel;
+        }
+        filter += videoLabel + cropScaleFilter(seg.cropRight, seg.cropLeft, seg.cropBottom, seg.cropTop, vidW, vidH)
+                + QString("[%1_vx%2];").arg(prefix).arg(i);
 
         if (withAudio) {
             const bool segHasAudio = (srcIdx == 0) ? primaryHasAudio : src.hasAudio;
             if (segHasAudio) {
                 const int track = (srcIdx == 0) ? primaryAudioTrack : 0;
-                filter += QString("[%1:a:%2]atrim=start=%3:duration=%4,asetpts=PTS-STARTPTS,volume=%5,"
-                                  "aresample=async=1,aformat=sample_rates=48000:channel_layouts=stereo[%6_a%7];")
-                              .arg(srcIdx).arg(track).arg(sLocal).arg(d).arg(seg.gain).arg(prefix).arg(i);
+                if (!hasSpeedChange) {
+                    filter += QString("[%1:a:%2]atrim=start=%3:duration=%4,asetpts=PTS-STARTPTS,volume=%5,"
+                                      "aresample=async=1,aformat=sample_rates=48000:channel_layouts=stereo[%6_a%7];")
+                                  .arg(srcIdx).arg(track).arg(sLocal).arg(d).arg(seg.gain).arg(prefix).arg(i);
+                } else if (qFuzzyCompare(seg.speedStart, seg.speedEnd)) {
+                    filter += QString("[%1:a:%2]atrim=start=%3:duration=%4,asetpts=PTS-STARTPTS,volume=%5,%6,"
+                                      "aresample=async=1,aformat=sample_rates=48000:channel_layouts=stereo[%7_a%8];")
+                                  .arg(srcIdx).arg(track).arg(sLocal).arg(d).arg(seg.gain)
+                                  .arg(chainedAtempo(seg.speedStart)).arg(prefix).arg(i);
+                } else {
+                    // Ramp: ffmpeg has no variable-rate atempo, so approximate with
+                    // a handful of constant-atempo sub-slices sampling the curve.
+                    const int N = 6;
+                    QString sub;
+                    for (int k = 0; k < N; ++k) {
+                        const double t0 = d * k / N, t1 = d * (k + 1) / N;
+                        const double sMid = seg.speedStart + (seg.speedEnd - seg.speedStart) * ((k + 0.5) / N);
+                        sub += QString("[%1:a:%2]atrim=start=%3:duration=%4,asetpts=PTS-STARTPTS,volume=%5,%6,"
+                                      "aresample=async=1,aformat=sample_rates=48000:channel_layouts=stereo[%7_a%8_%9];")
+                                   .arg(srcIdx).arg(track).arg(sLocal + t0).arg(t1 - t0).arg(seg.gain)
+                                   .arg(chainedAtempo(sMid)).arg(prefix).arg(i).arg(k);
+                    }
+                    for (int k = 0; k < N; ++k) sub += QString("[%1_a%2_%3]").arg(prefix).arg(i).arg(k);
+                    sub += QString("concat=n=%1:v=0:a=1[%2_a%3];").arg(N).arg(prefix).arg(i);
+                    filter += sub;
+                }
             } else {
                 filter += QString("aevalsrc=0:channel_layout=stereo:sample_rate=48000:d=%1[%2_a%3];")
-                              .arg(d).arg(prefix).arg(i);
+                              .arg(dOut).arg(prefix).arg(i);
             }
         }
     }

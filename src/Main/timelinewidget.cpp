@@ -91,7 +91,7 @@ void TimelineWidget::splitAtPlayhead() {
 
 void TimelineWidget::addOverlayAt(int type, qint64 timeMs) {
     if (durationMs <= 0) return;
-    saveState();
+    saveState("Add overlay");
 
     OverlayClip clip;
     clip.type = type;
@@ -100,6 +100,10 @@ void TimelineWidget::addOverlayAt(int type, qint64 timeMs) {
     if (type == 3) {
         clip.l = 0.30f; clip.t = 0.40f; clip.r = 0.70f; clip.b = 0.55f;
         clip.text = "Your text";
+    } else if (type == 4) {
+        clip.l = 0.30f; clip.t = 0.30f; clip.r = 0.70f; clip.b = 0.60f;
+    } else if (type == 5) {
+        clip.l = 0.0f; clip.t = 0.0f; clip.r = 1.0f; clip.b = 1.0f;
     }
     overlays.append(clip);
     selectedOverlayIdx = overlays.size() - 1;
@@ -108,17 +112,54 @@ void TimelineWidget::addOverlayAt(int type, qint64 timeMs) {
     update();
     emit overlaysChanged();
     if (type == 3) emit requestEditTextOverlay(selectedOverlayIdx);
+    else if (type == 4 || type == 5) emit requestEditOverlayProperties(selectedOverlayIdx);
 }
 
 void TimelineWidget::deleteSelectedOverlay() {
     if (selectedOverlayIdx < 0 || selectedOverlayIdx >= overlays.size()) return;
-    saveState();
+    saveState("Delete overlay");
     overlays.removeAt(selectedOverlayIdx);
     selectedOverlayIdx = -1;
     showNotification("OVERLAY DELETED");
     relayout();
     update();
     emit overlaysChanged();
+}
+
+void TimelineWidget::toggleMarkerAtPlayhead() {
+    if (durationMs <= 0) return;
+    const qint64 tolerance = 300;
+    for (int i = 0; i < markers.size(); ++i) {
+        if (std::abs(markers[i] - currentPosMs) <= tolerance) {
+            saveState("Remove marker");
+            markers.removeAt(i);
+            showNotification("MARKER REMOVED");
+            update();
+            return;
+        }
+    }
+    saveState("Add marker");
+    markers.append(currentPosMs);
+    std::sort(markers.begin(), markers.end());
+    showNotification("MARKER ADDED");
+    update();
+}
+
+// Snaps a candidate time to the nearest playhead/marker/segment-edge within a
+// small pixel tolerance, so dragging a trim handle or overlay edge feels
+// magnetic near those reference points instead of requiring pixel-perfect aim.
+qint64 TimelineWidget::snappedTime(qint64 t, double pxPerMs) const {
+    const qint64 toleranceMs = static_cast<qint64>(8.0 / qMax(0.0001, pxPerMs));
+    qint64 best = t;
+    qint64 bestDist = toleranceMs + 1;
+    auto consider = [&](qint64 candidate) {
+        const qint64 dist = std::abs(candidate - t);
+        if (dist <= toleranceMs && dist < bestDist) { bestDist = dist; best = candidate; }
+    };
+    consider(currentPosMs);
+    for (qint64 m : markers) consider(m);
+    for (const auto &seg : segments) { consider(seg.startMs); consider(seg.endMs); }
+    return best;
 }
 
 QList<int> TimelineWidget::overlaysAtTime(qint64 timeMs) const {
@@ -299,7 +340,7 @@ void TimelineWidget::appendMediaSource(const QString &path) {
             return;
         }
 
-        saveState();
+        saveState("Add media source");
         SourceClip src;
         src.path = path;
         src.offsetMs = durationMs;
@@ -337,7 +378,7 @@ void TimelineWidget::appendMediaSource(const QString &path) {
 
 void TimelineWidget::deleteSelectedSegment() {
     if (selectedSegmentIdx >= 0 && selectedSegmentIdx < segments.size()) {
-        saveState();
+        saveState("Delete clip");
         segments.removeAt(selectedSegmentIdx);
         selectedSegmentIdx = -1;
         showNotification("CLIP DELETED 🗑️");
@@ -352,7 +393,7 @@ void TimelineWidget::deleteActiveSelection() {
     if (selectedSegmentIdx != -1) toDelete.insert(selectedSegmentIdx);
     if (toDelete.isEmpty()) return;
 
-    saveState();
+    saveState("Delete selection");
 
     QList<int> sortedIndices = toDelete.values();
     std::sort(sortedIndices.begin(), sortedIndices.end(), std::greater<int>());
@@ -505,6 +546,18 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
         }
         painter.setPen(QPen(QColor(255, 255, 255, 30), 1));
         painter.drawLine(0, rulerHeight, contentWidth, rulerHeight);
+    }
+
+    // --- Markers: small triangles in the ruler, snap targets for trims/overlays ---
+    if (!markers.isEmpty()) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(accent);
+        for (qint64 m : markers) {
+            const int x = static_cast<int>(m * pxPerMs);
+            QPolygon tri;
+            tri << QPoint(x - 5, rulerHeight - 1) << QPoint(x + 5, rulerHeight - 1) << QPoint(x, rulerHeight - 9);
+            painter.drawPolygon(tri);
+        }
     }
 
     for (int i = 0; i < segments.size(); ++i) {
@@ -682,7 +735,7 @@ QSet<int> TimelineWidget::targetVisualSegments() const {
 }
 
 void TimelineWidget::applyCurrentVisualsToSelection(bool allSegments) {
-    saveState();
+    saveState("Apply crop");
     QSet<int> targets;
     if (allSegments) {
         for (int i = 0; i < segments.size(); ++i) targets.insert(i);
@@ -704,7 +757,7 @@ void TimelineWidget::applyCurrentVisualsToSelection(bool allSegments) {
 }
 
 void TimelineWidget::clearVisualsForSelection(bool allSegments) {
-    saveState();
+    saveState("Clear crop");
     QSet<int> targets;
     if (allSegments) {
         for (int i = 0; i < segments.size(); ++i) targets.insert(i);
@@ -722,6 +775,26 @@ void TimelineWidget::clearVisualsForSelection(bool allSegments) {
 
     emitVisualStateForCurrentContext();
     showNotification(allSegments ? "CLEARED ALL CROPS" : "CLEARED CLIP CROP");
+    emit clipTrimmed();
+    update();
+}
+
+void TimelineWidget::applySpeedRampToSelection(float speedStart, float speedEnd, bool allSegments) {
+    saveState("Apply speed ramp");
+    QSet<int> targets;
+    if (allSegments) {
+        for (int i = 0; i < segments.size(); ++i) targets.insert(i);
+    } else {
+        targets = targetVisualSegments();
+    }
+
+    for (int idx : targets) {
+        if (idx < 0 || idx >= segments.size()) continue;
+        segments[idx].speedStart = qMax(0.1f, speedStart);
+        segments[idx].speedEnd = qMax(0.1f, speedEnd);
+    }
+
+    showNotification(allSegments ? "SPEED RAMP APPLIED TO ALL CLIPS" : "SPEED RAMP APPLIED TO CLIP");
     emit clipTrimmed();
     update();
 }
@@ -830,6 +903,13 @@ void TimelineWidget::mouseDoubleClickEvent(QMouseEvent *event) {
         update();
         emit overlaysChanged();
         emit requestEditTextOverlay(idx);
+        return;
+    }
+    if (idx != -1 && (overlays[idx].type == 4 || overlays[idx].type == 5)) {
+        selectedOverlayIdx = idx;
+        update();
+        emit overlaysChanged();
+        emit requestEditOverlayProperties(idx);
         return;
     }
     QWidget::mouseDoubleClickEvent(event);

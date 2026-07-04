@@ -34,7 +34,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* e) {
                 return;
             }
 
-            saveState();
+            saveState("Move overlay");
             overlayDrag = ovEdge;
             overlayDragIdx = ovIdx;
             overlayDragGrabOffsetMs = clickTime - overlays[ovIdx].startMs;
@@ -127,7 +127,7 @@ void TimelineWidget::showClipContextMenu(const QPoint &globalPos, qint64 clickTi
 
     if (chosen == splitAction) {
         currentPosMs = qBound(0LL, clickTime, durationMs);
-        saveState();
+        saveState("Split clip");
         splitAtPlayhead();
         return;
     }
@@ -161,12 +161,13 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
 
         if (overlayDrag == OvMove) {
             const qint64 len = ov.endMs - ov.startMs;
-            ov.startMs = qBound<qint64>(0, mouseTime - overlayDragGrabOffsetMs, durationMs - len);
+            const qint64 snappedStart = snappedTime(qBound<qint64>(0, mouseTime - overlayDragGrabOffsetMs, durationMs - len), pxPerMs);
+            ov.startMs = qBound<qint64>(0, snappedStart, durationMs - len);
             ov.endMs = ov.startMs + len;
         } else if (overlayDrag == OvStart) {
-            ov.startMs = qBound<qint64>(0, mouseTime, ov.endMs - minLen);
+            ov.startMs = qBound<qint64>(0, snappedTime(mouseTime, pxPerMs), ov.endMs - minLen);
         } else if (overlayDrag == OvEnd) {
-            ov.endMs = qBound<qint64>(ov.startMs + minLen, mouseTime, durationMs);
+            ov.endMs = qBound<qint64>(ov.startMs + minLen, snappedTime(mouseTime, pxPerMs), durationMs);
         }
         update();
         emit overlaysChanged();
@@ -253,7 +254,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
     }
 
     if (activeEdge != None && activeSegmentIdx != -1) {
-        const qint64 newTime = qBound(0LL, static_cast<qint64>(drawX / pxPerMs), durationMs);
+        const qint64 newTime = snappedTime(qBound(0LL, static_cast<qint64>(drawX / pxPerMs), durationMs), pxPerMs);
         const qint64 minSegmentDuration = playbackSettings.minSegmentDurationMs;
         if (activeEdge == Start) {
             const qint64 minStart = (activeSegmentIdx > 0) ? segments[activeSegmentIdx-1].endMs : 0;
@@ -282,7 +283,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* e) {
     }
 
     if (activeEdge != None) {
-        saveState();
+        saveState("Trim clip");
         emit clipTrimmed();
     }
 
@@ -336,8 +337,13 @@ void TimelineWidget::wheelEvent(QWheelEvent *e) {
         int mouseX = e->position().x() - sidebarWidth;
         scrollOffset = (static_cast<double>(scrollOffset + mouseX) / oldZoom * zoomFactor) - mouseX;
         emit zoomChanged(zoomFactor);
-    } else {
+    } else if (zoomFactor > 1.0) {
         scrollOffset += (e->angleDelta().y() > 0 ? -120 : 120);
+    } else {
+        // Nothing to pan horizontally when not zoomed in — let the wheel
+        // event bubble up so the surrounding QScrollArea can scroll vertically.
+        e->ignore();
+        return;
     }
     scrollOffset = qBound(0, scrollOffset, qMax(0, static_cast<int>(viewWidth * zoomFactor) - viewWidth));
     update();

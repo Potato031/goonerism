@@ -143,6 +143,47 @@ inline QIcon exitFullscreen(const QColor &c) {
     }, c);
 }
 
+inline QIcon winMinimize(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawLine(QPointF(26, 58), QPointF(74, 58));
+    }, c);
+}
+
+inline QIcon winMaximize(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawRoundedRect(QRectF(27, 27, 46, 46), 6, 6);
+    }, c, 7.0);
+}
+
+inline QIcon winRestore(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawRoundedRect(QRectF(35, 22, 38, 38), 5, 5);
+        p.drawRoundedRect(QRectF(22, 35, 38, 38), 5, 5);
+    }, c, 7.0);
+}
+
+inline QIcon winClose(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawLine(QPointF(28, 28), QPointF(72, 72));
+        p.drawLine(QPointF(72, 28), QPointF(28, 72));
+    }, c);
+}
+
+// Small abstract app mark for the titlebar — a rounded blob, not a photo icon.
+inline QIcon appMark(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        QPainterPath blob;
+        blob.addRoundedRect(20, 20, 60, 60, 20, 20);
+        fillGlyph(p, blob);
+    }, c);
+}
+
+inline QIcon chevronDown(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawPolyline(QPolygonF({{25, 35}, {50, 65}, {75, 35}}));
+    }, c);
+}
+
 // camera / snapshot
 inline QIcon snapshot(const QColor &c) {
     return makeIcon([](QPainter &p, const QRectF &) {

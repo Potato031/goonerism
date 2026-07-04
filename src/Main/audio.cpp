@@ -111,7 +111,7 @@ void TimelineWidget::autoCutSilence() {
         showNotification("NO AUDIO TRACK TO ANALYZE");
         return;
     }
-    saveState();
+    saveState("Auto-cut silence");
     showNotification("ANALYZING TRIMMED SECTIONS");
 
     // Copy the segments so timeline edits during analysis can't crash us.

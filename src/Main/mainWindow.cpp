@@ -103,6 +103,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 }
 
 void MainWindow::setupUi() {
+    // Custom chrome: no OS decoration, translucent so QSS can paint rounded
+    // corners on QMainWindow#MainCanvas against the desktop behind it.
+    setWindowFlags(Qt::FramelessWindowHint | Qt::Window);
+    setAttribute(Qt::WA_TranslucentBackground, true);
+    // QMainWindow is one of the widget classes that ignores the QSS box model
+    // (border/border-radius) unless this is set explicitly — otherwise only
+    // the plain background-color gets applied via the palette.
+    setAttribute(Qt::WA_StyledBackground, true);
+
     auto* centralWidget = new QWidget(this);
     centralWidget->setObjectName("centralWidget");
     centralWidget->setAcceptDrops(true);
@@ -113,6 +122,9 @@ void MainWindow::setupUi() {
     mainLayout = new QVBoxLayout(centralWidget);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
+
+    setupTitleBar();
+    mainLayout->addWidget(titleBar);
 
     setupToolbar();
 
@@ -147,11 +159,15 @@ void MainWindow::setupUi() {
     blurBtn = new DragToolButton(0, "◐  Blur region");
     pixelBtn = new DragToolButton(1, "▦  Pixelate region");
     solidBtn = new DragToolButton(2, "■  Blackout region");
+    shapeBtn = new DragToolButton(4, "▱  Shape / arrow");
+    colorCorrectBtn = new DragToolButton(5, "◑  Color correction");
     actionsGroupLabel = new QLabel("ACTIONS");
     actionsGroupLabel->setObjectName("InspectorGroupLabel");
     autoCutBtn = new QPushButton("✂  Auto-cut silence");
     resetCropBtn = new QPushButton("⤺  Reset crop");
-    for (QPushButton *button : {textBtn, blurBtn, pixelBtn, solidBtn, autoCutBtn, resetCropBtn}) {
+    speedRampBtn = new QPushButton("⏱  Speed ramp…");
+    for (QPushButton *button : {textBtn, blurBtn, pixelBtn, solidBtn, shapeBtn, colorCorrectBtn,
+                                 autoCutBtn, resetCropBtn, speedRampBtn}) {
         button->setProperty("class", "ToolBtn");
         button->setLayoutDirection(Qt::LeftToRight);
     }
@@ -159,16 +175,22 @@ void MainWindow::setupUi() {
     blurBtn->setToolTip("Add a blur overlay at the playhead (or drag onto the video/timeline)");
     pixelBtn->setToolTip("Add a pixelate overlay at the playhead (or drag onto the video/timeline)");
     solidBtn->setToolTip("Add a blackout overlay at the playhead (or drag onto the video/timeline)");
+    shapeBtn->setToolTip("Add a rectangle/ellipse/arrow annotation at the playhead (or drag onto the video/timeline)");
+    colorCorrectBtn->setToolTip("Add a brightness/contrast/saturation region at the playhead (or drag onto the video/timeline)");
+    speedRampBtn->setToolTip("Set a constant speed or speed ramp for the selected clip(s)");
 
     timelineToolsLayout->addWidget(redactGroupLabel);
     timelineToolsLayout->addWidget(textBtn);
     timelineToolsLayout->addWidget(blurBtn);
     timelineToolsLayout->addWidget(pixelBtn);
     timelineToolsLayout->addWidget(solidBtn);
+    timelineToolsLayout->addWidget(shapeBtn);
+    timelineToolsLayout->addWidget(colorCorrectBtn);
     timelineToolsLayout->addSpacing(10);
     timelineToolsLayout->addWidget(actionsGroupLabel);
     timelineToolsLayout->addWidget(autoCutBtn);
     timelineToolsLayout->addWidget(resetCropBtn);
+    timelineToolsLayout->addWidget(speedRampBtn);
     timelineToolsLayout->addStretch();
 
     topPaneSplitter->addWidget(clipSidebar);
@@ -200,6 +222,62 @@ void MainWindow::setupUi() {
     
     playPauseShortcut = nullptr;
     connect(importBtn, &QPushButton::clicked, this, &MainWindow::importMedia);
+}
+
+void MainWindow::setupTitleBar() {
+    titleBar = new TitleBar();
+    titleBar->setTitleText(editorSettings.windowTitle.toUpper());
+
+    connect(titleBar, &TitleBar::minimizeRequested, this, &QWidget::showMinimized);
+    connect(titleBar, &TitleBar::maximizeRestoreRequested, this, [this]() {
+        isMaximized() ? showNormal() : showMaximized();
+    });
+    connect(titleBar, &TitleBar::closeRequested, this, &QWidget::close);
+
+    for (Qt::Edges edges : {Qt::Edges(Qt::TopEdge), Qt::Edges(Qt::BottomEdge),
+                             Qt::Edges(Qt::LeftEdge), Qt::Edges(Qt::RightEdge),
+                             Qt::TopEdge | Qt::LeftEdge, Qt::TopEdge | Qt::RightEdge,
+                             Qt::BottomEdge | Qt::LeftEdge, Qt::BottomEdge | Qt::RightEdge}) {
+        resizeGrips.append(new ResizeGrip(edges, this));
+    }
+}
+
+void MainWindow::updateMaximizedState() {
+    const bool maximized = isMaximized();
+    if (auto *cw = centralWidget()) {
+        cw->setProperty("maximized", maximized);
+        style()->unpolish(cw);
+        style()->polish(cw);
+    }
+    for (ResizeGrip *grip : resizeGrips) grip->setVisible(!maximized);
+    applyIcons();
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    constexpr int m = 6;   // edge grip thickness
+    constexpr int c = 12;  // corner grip size
+    const int w = width();
+    const int h = height();
+    for (ResizeGrip *grip : resizeGrips) {
+        const Qt::Edges e = grip->edges();
+        if (e == Qt::Edges(Qt::TopEdge)) grip->setGeometry(c, 0, qMax(0, w - 2 * c), m);
+        else if (e == Qt::Edges(Qt::BottomEdge)) grip->setGeometry(c, h - m, qMax(0, w - 2 * c), m);
+        else if (e == Qt::Edges(Qt::LeftEdge)) grip->setGeometry(0, c, m, qMax(0, h - 2 * c));
+        else if (e == Qt::Edges(Qt::RightEdge)) grip->setGeometry(w - m, c, m, qMax(0, h - 2 * c));
+        else if (e == (Qt::TopEdge | Qt::LeftEdge)) grip->setGeometry(0, 0, c, c);
+        else if (e == (Qt::TopEdge | Qt::RightEdge)) grip->setGeometry(w - c, 0, c, c);
+        else if (e == (Qt::BottomEdge | Qt::LeftEdge)) grip->setGeometry(0, h - c, c, c);
+        else if (e == (Qt::BottomEdge | Qt::RightEdge)) grip->setGeometry(w - c, h - c, c, c);
+        grip->raise();
+    }
+}
+
+void MainWindow::changeEvent(QEvent *event) {
+    QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::WindowStateChange) {
+        updateMaximizedState();
+    }
 }
 
 void MainWindow::setupToolbar() {
@@ -435,10 +513,13 @@ void MainWindow::setupTimeline() {
     };
     undoBtn = makeEditBtn("Undo");
     redoBtn = makeEditBtn("Redo");
+    historyBtn = makeEditBtn("Edit history");
+    historyBtn->setFixedSize(18, 28);
     splitBtn = makeEditBtn("Split clip at playhead");
     deleteClipBtn = makeEditBtn("Delete selected clips");
     timelineHeader->addWidget(undoBtn);
     timelineHeader->addWidget(redoBtn);
+    timelineHeader->addWidget(historyBtn);
     timelineHeader->addWidget(splitBtn);
     timelineHeader->addWidget(deleteClipBtn);
 
@@ -568,11 +649,15 @@ void MainWindow::setupConnections() {
     connect(blurBtn, &QPushButton::clicked, this, [this]() { timeline->addOverlayAtPlayhead(0); });
     connect(pixelBtn, &QPushButton::clicked, this, [this]() { timeline->addOverlayAtPlayhead(1); });
     connect(solidBtn, &QPushButton::clicked, this, [this]() { timeline->addOverlayAtPlayhead(2); });
+    connect(shapeBtn, &QPushButton::clicked, this, [this]() { timeline->addOverlayAtPlayhead(4); });
+    connect(colorCorrectBtn, &QPushButton::clicked, this, [this]() { timeline->addOverlayAtPlayhead(5); });
+    connect(speedRampBtn, &QPushButton::clicked, this, &MainWindow::openSpeedRampDialog);
     connect(videoWithCrop, &VideoWithCropWidget::overlayDropped, this, [this](int type) {
         timeline->addOverlayAtPlayhead(type);
     });
     connect(timeline, &TimelineWidget::overlaysChanged, this, &MainWindow::syncOverlaysToPreview);
     connect(timeline, &TimelineWidget::requestEditTextOverlay, this, &MainWindow::editTextOverlay);
+    connect(timeline, &TimelineWidget::requestEditOverlayProperties, this, &MainWindow::editOverlayProperties);
 
     // Region edits on the preview write straight back to the overlay clips.
     connect(videoWithCrop, &VideoWithCropWidget::filtersChanged, this,
@@ -719,6 +804,7 @@ void MainWindow::setupConnections() {
     // Timeline edit buttons
     connect(undoBtn, &QPushButton::clicked, this, [this]() { timeline->undo(); });
     connect(redoBtn, &QPushButton::clicked, this, [this]() { timeline->redo(); });
+    connect(historyBtn, &QPushButton::clicked, this, &MainWindow::showHistoryMenu);
     connect(splitBtn, &QPushButton::clicked, this, [this]() { timeline->requestSplit(); });
     connect(deleteClipBtn, &QPushButton::clicked, this, [this]() { timeline->deleteActiveSelection(); });
     connect(resetCropBtn, &QPushButton::clicked, [this]() {
@@ -1021,6 +1107,7 @@ void MainWindow::loadEditorSettings() {
     editorSettings.keyExportVideo = settings.value("keybinds/exportVideo", editorSettings.keyExportVideo).toString();
     editorSettings.keyExportMutedVideo = settings.value("keybinds/exportMutedVideo", editorSettings.keyExportMutedVideo).toString();
     editorSettings.keyCycleAudioTrack = settings.value("keybinds/cycleAudioTrack", editorSettings.keyCycleAudioTrack).toString();
+    editorSettings.keyAddMarker = settings.value("keybinds/addMarker", editorSettings.keyAddMarker).toString();
     editorSettings.autoLoadDirectories = settings.value("ui/autoLoadDirectories").toStringList();
 
     TimelineWidget::PlaybackSettings playback = timeline->getPlaybackSettings();
@@ -1123,6 +1210,7 @@ void MainWindow::saveEditorSettings() const {
     settings.setValue("keybinds/exportVideo", editorSettings.keyExportVideo);
     settings.setValue("keybinds/exportMutedVideo", editorSettings.keyExportMutedVideo);
     settings.setValue("keybinds/cycleAudioTrack", editorSettings.keyCycleAudioTrack);
+    settings.setValue("keybinds/addMarker", editorSettings.keyAddMarker);
     settings.setValue("ui/autoLoadDirectories", editorSettings.autoLoadDirectories);
 
     const auto playback = timeline->getPlaybackSettings();
@@ -1153,6 +1241,7 @@ void MainWindow::saveEditorSettings() const {
 
 void MainWindow::applyEditorSettings() {
     setWindowTitle(editorSettings.windowTitle);
+    if (titleBar) titleBar->setTitleText(editorSettings.windowTitle.toUpper());
     if (logoBoldLabel) logoBoldLabel->setText(editorSettings.logoPrimaryText);
     if (logoLightLabel) logoLightLabel->setText(editorSettings.logoSecondaryText);
     if (importBtn) importBtn->setText(editorSettings.importButtonText);
@@ -1259,8 +1348,25 @@ QString MainWindow::buildAppStyleSheet() const {
 
     QString sheet = QString(R"(
 QWidget { font-family: "@font"; font-size: @fontSizept; color: @text; }
-QMainWindow#MainCanvas, QWidget#centralWidget { background: @bgStart; }
+QMainWindow#MainCanvas { background: @bgStart; }
+QWidget#centralWidget {
+    background: @bgStart;
+    border-radius: @panelRadiuspx;
+    border: 1px solid @subtleBorder;
+}
+QWidget#centralWidget[maximized="true"] { border-radius: 0; border: none; }
 QDialog, QMessageBox { background: @bgEnd; }
+
+QWidget#AppTitleBar { background: transparent; border: none; }
+QLabel#AppMark { background: transparent; }
+QLabel#TitleBarLabel { color: @muted; font-size: 9pt; font-weight: 600; letter-spacing: 1px; }
+QPushButton#WinBtn, QPushButton#CloseBtn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: @btnRadiuspx;
+}
+QPushButton#WinBtn:hover { background: @hoverWash; border-color: @subtleBorder; }
+QPushButton#CloseBtn:hover { background: rgba(232, 68, 68, 0.85); border-color: transparent; }
 
 QFrame#toolbar {
     background: @panel;
@@ -1303,12 +1409,13 @@ QLabel#TimecodeLabel {
 QLabel#CurrentMediaPill, QLabel#MiniBadge {
     background: @chipBg;
     border: 1px solid @chipBorder;
+    border-radius: @badgeRadiuspx;
     color: @chipText;
     font-size: @badgeFontSizept;
 }
 
 QPushButton { color: @text; }
-QPushButton#ActionBtn { background: @accent; border: none; }
+QPushButton#ActionBtn { background: @accent; border: none; border-radius: @bigButtonRadiuspx; }
 QPushButton#ActionBtn:hover { background: @accentHover; }
 QPushButton#ActionBtn:pressed { background: @accentPressed; }
 QPushButton#ActionBtn:disabled { background: @control; }
@@ -1417,6 +1524,8 @@ VideoWithCropWidget {
         {"@metaFontSize", QString::number(metaFontSize)},
         {"@panelRadius", QString::number(panelRadius)},
         {"@btnRadius", QString::number(buttonRadius)},
+        {"@badgeRadius", QString::number(badgeRadius)},
+        {"@bigButtonRadius", QString::number(bigButtonRadius)},
         {"@accentHover", accentHover},
         {"@accentPressed", accentPressed},
         {"@accentSoft", accentSoft},
@@ -1466,15 +1575,35 @@ void MainWindow::applyToolButtonOrder() {
     }
     QStringList order = editorSettings.toolButtonOrder.split(',', Qt::SkipEmptyParts);
     if (!order.contains("text")) order.prepend("text"); // configs saved before text overlays existed
+
+    // Configs saved before these effects existed: insert them after the last
+    // entry of their own category rather than at the absolute end, so they
+    // land under the right group header instead of looking like stray actions.
+    auto insertAfterLastOf = [&order](const QStringList &categoryIds, const QString &newId) {
+        if (order.contains(newId)) return;
+        int insertAt = -1;
+        for (int i = 0; i < order.size(); ++i) {
+            if (categoryIds.contains(order[i])) insertAt = i;
+        }
+        order.insert(insertAt + 1, newId);
+    };
+    const QStringList redactIds = {"text", "blur", "pixel", "blackout", "shape", "colorcorrect"};
+    const QStringList actionIds = {"autocut", "resetcrop", "speedramp"};
+    insertAfterLastOf(redactIds, "shape");
+    insertAfterLastOf(redactIds, "colorcorrect");
+    insertAfterLastOf(actionIds, "speedramp");
     const QList<QPair<QString, QWidget*>> redactButtons = {
         {"text", textBtn},
         {"blur", blurBtn},
         {"pixel", pixelBtn},
-        {"blackout", solidBtn}
+        {"blackout", solidBtn},
+        {"shape", shapeBtn},
+        {"colorcorrect", colorCorrectBtn}
     };
     const QList<QPair<QString, QWidget*>> actionButtons = {
         {"autocut", autoCutBtn},
-        {"resetcrop", resetCropBtn}
+        {"resetcrop", resetCropBtn},
+        {"speedramp", speedRampBtn}
     };
 
     bool redactGroupShown = false;
@@ -1516,6 +1645,11 @@ void MainWindow::applyIcons() {
     fullscreenIcon = Icons::fullscreen(iconColor);
     exitFullscreenIcon = Icons::exitFullscreen(iconColor);
 
+    titleBar->minBtn->setIcon(Icons::winMinimize(iconColor));
+    titleBar->maxBtn->setIcon(isMaximized() ? Icons::winRestore(iconColor) : Icons::winMaximize(iconColor));
+    titleBar->closeBtn->setIcon(Icons::winClose(iconColor));
+    titleBar->setAppMarkColor(mutedColor);
+
     playPauseBtn->setIcon(player && player->playbackState() == QMediaPlayer::PlayingState ? pauseIcon : playIcon);
     jumpBackBtn->setIcon(Icons::jumpBack(iconColor));
     stepBackBtn->setIcon(Icons::stepBack(iconColor));
@@ -1529,12 +1663,14 @@ void MainWindow::applyIcons() {
     sidebarImportBtn->setIcon(Icons::importMedia(mutedColor));
     undoBtn->setIcon(Icons::undo(iconColor));
     redoBtn->setIcon(Icons::redo(iconColor));
+    historyBtn->setIcon(Icons::chevronDown(mutedColor));
     splitBtn->setIcon(Icons::split(iconColor));
     deleteClipBtn->setIcon(Icons::trash(iconColor));
     exportBtn->setIcon(Icons::exportMedia(onAccent));
     exportBtn->setIconSize(QSize(14, 14));
 
     const QSize small(15, 15);
+    historyBtn->setIconSize(QSize(11, 11));
     for (QPushButton *btn : {jumpBackBtn, stepBackBtn, stepFwdBtn, jumpFwdBtn,
                              muteBtn, snapshotBtn, fullscreenBtn, helpBtn, settingsBtn,
                              undoBtn, redoBtn, splitBtn, deleteClipBtn}) {
@@ -1601,6 +1737,7 @@ void MainWindow::showShortcutsDialog() {
         {"Export audio", editorSettings.keyExportAudio},
         {"Export GIF", editorSettings.keyExportGif},
         {"Cycle audio track", editorSettings.keyCycleAudioTrack},
+        {"Add/remove marker", editorSettings.keyAddMarker},
     };
 
     auto *grid = new QGridLayout();
@@ -1673,6 +1810,12 @@ void MainWindow::syncOverlaysToPreview() {
         obj.l = ov.l; obj.t = ov.t; obj.r = ov.r; obj.b = ov.b;
         obj.mode = ov.type;
         obj.text = ov.text;
+        obj.shapeKind = ov.shapeKind;
+        obj.shapeColor = ov.shapeColor;
+        obj.shapeThickness = ov.shapeThickness;
+        obj.brightness = ov.brightness;
+        obj.contrast = ov.contrast;
+        obj.saturation = ov.saturation;
         regions.append(obj);
         if (previewOverlayMap[i] == timeline->selectedOverlayIdx) selectedPreviewIdx = i;
     }
@@ -1697,6 +1840,199 @@ void MainWindow::editTextOverlay(int index) {
     ov.text = text.trimmed().isEmpty() ? QStringLiteral("Your text") : text;
     timeline->update();
     syncOverlaysToPreview();
+}
+
+void MainWindow::editOverlayProperties(int index) {
+    if (index < 0 || index >= timeline->overlays.size()) return;
+    auto &ov = timeline->overlays[index];
+    if (ov.type != 4 && ov.type != 5) return;
+
+    QDialog dialog(this);
+    dialog.setObjectName("SettingsDialog");
+    dialog.setStyleSheet(buildAppStyleSheet());
+    dialog.setWindowTitle(ov.type == 4 ? "Shape / Arrow" : "Color Correction");
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(16, 16, 16, 12);
+    layout->setSpacing(12);
+    auto *form = new QFormLayout();
+    form->setSpacing(10);
+    layout->addLayout(form);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (ov.type == 4) {
+        const int origKind = ov.shapeKind;
+        const QColor origColor = ov.shapeColor;
+        const int origThickness = ov.shapeThickness;
+
+        auto *kindBox = new QComboBox();
+        kindBox->addItems({"Rectangle", "Ellipse", "Arrow"});
+        kindBox->setCurrentIndex(ov.shapeKind);
+        form->addRow("Shape", kindBox);
+
+        auto *colorBtn = new QPushButton(ov.shapeColor.name().toUpper());
+        auto refreshColorBtn = [colorBtn](const QColor &c) {
+            colorBtn->setStyleSheet(QString("background-color: %1; color: %2;")
+                                         .arg(c.name(), c.lightness() > 128 ? "#000000" : "#FFFFFF"));
+        };
+        refreshColorBtn(ov.shapeColor);
+        form->addRow("Color", colorBtn);
+
+        auto *thicknessSpin = new QSpinBox();
+        thicknessSpin->setRange(1, 40);
+        thicknessSpin->setValue(ov.shapeThickness);
+        form->addRow("Thickness", thicknessSpin);
+
+        connect(kindBox, &QComboBox::currentIndexChanged, &dialog, [this, &ov, kindBox]() {
+            ov.shapeKind = kindBox->currentIndex();
+            timeline->update();
+            syncOverlaysToPreview();
+        });
+        connect(colorBtn, &QPushButton::clicked, &dialog, [this, &ov, &dialog, colorBtn, refreshColorBtn]() {
+            const QColor picked = QColorDialog::getColor(ov.shapeColor, &dialog, "Shape Color");
+            if (!picked.isValid()) return;
+            ov.shapeColor = picked;
+            colorBtn->setText(picked.name().toUpper());
+            refreshColorBtn(picked);
+            syncOverlaysToPreview();
+        });
+        connect(thicknessSpin, &QSpinBox::valueChanged, &dialog, [this, &ov](int v) {
+            ov.shapeThickness = v;
+            timeline->update();
+            syncOverlaysToPreview();
+        });
+
+        layout->addWidget(buttons);
+        if (dialog.exec() != QDialog::Accepted) {
+            ov.shapeKind = origKind;
+            ov.shapeColor = origColor;
+            ov.shapeThickness = origThickness;
+        }
+    } else {
+        const float origBrightness = ov.brightness;
+        const float origContrast = ov.contrast;
+        const float origSaturation = ov.saturation;
+
+        auto makeSlider = [](int minV, int maxV, int val) {
+            auto *s = new QSlider(Qt::Horizontal);
+            s->setRange(minV, maxV);
+            s->setValue(val);
+            return s;
+        };
+        auto *brightnessSlider = makeSlider(-100, 100, qRound(ov.brightness * 100));
+        auto *contrastSlider = makeSlider(0, 200, qRound(ov.contrast * 100));
+        auto *saturationSlider = makeSlider(0, 200, qRound(ov.saturation * 100));
+        form->addRow("Brightness", brightnessSlider);
+        form->addRow("Contrast", contrastSlider);
+        form->addRow("Saturation", saturationSlider);
+
+        connect(brightnessSlider, &QSlider::valueChanged, &dialog, [this, &ov](int v) {
+            ov.brightness = v / 100.0f;
+            syncOverlaysToPreview();
+        });
+        connect(contrastSlider, &QSlider::valueChanged, &dialog, [this, &ov](int v) {
+            ov.contrast = v / 100.0f;
+            syncOverlaysToPreview();
+        });
+        connect(saturationSlider, &QSlider::valueChanged, &dialog, [this, &ov](int v) {
+            ov.saturation = v / 100.0f;
+            syncOverlaysToPreview();
+        });
+
+        layout->addWidget(buttons);
+        if (dialog.exec() != QDialog::Accepted) {
+            ov.brightness = origBrightness;
+            ov.contrast = origContrast;
+            ov.saturation = origSaturation;
+        }
+    }
+
+    timeline->update();
+    syncOverlaysToPreview();
+}
+
+void MainWindow::showHistoryMenu() {
+    const QStringList undoLabels = timeline->undoHistoryLabels(); // oldest..most-recent-past
+    const QStringList redoLabels = timeline->redoHistoryLabels(); // nearest..farthest-future
+    if (undoLabels.isEmpty() && redoLabels.isEmpty()) {
+        TimelineWidget::showNotification("NO HISTORY YET");
+        return;
+    }
+
+    QMenu menu(this);
+    menu.setObjectName("TimelineContextMenu");
+
+    QList<QAction*> pastActions;
+    for (const QString &label : undoLabels) pastActions.append(menu.addAction(label));
+
+    menu.addSeparator();
+    QAction *currentAction = menu.addAction("● Current");
+    currentAction->setEnabled(false);
+    menu.addSeparator();
+
+    QList<QAction*> futureActions;
+    for (const QString &label : redoLabels) futureActions.append(menu.addAction(label));
+
+    QAction *chosen = menu.exec(historyBtn->mapToGlobal(QPoint(0, historyBtn->height())));
+    if (!chosen || chosen == currentAction) return;
+
+    const int pastIdx = pastActions.indexOf(chosen);
+    if (pastIdx != -1) {
+        for (int i = 0, steps = pastActions.size() - pastIdx; i < steps; ++i) timeline->undo();
+        return;
+    }
+    const int futureIdx = futureActions.indexOf(chosen);
+    if (futureIdx != -1) {
+        for (int i = 0; i <= futureIdx; ++i) timeline->redo();
+    }
+}
+
+void MainWindow::openSpeedRampDialog() {
+    QDialog dialog(this);
+    dialog.setObjectName("SettingsDialog");
+    dialog.setStyleSheet(buildAppStyleSheet());
+    dialog.setWindowTitle("Speed Ramp");
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(16, 16, 16, 12);
+    layout->setSpacing(12);
+    auto *form = new QFormLayout();
+    form->setSpacing(10);
+    layout->addLayout(form);
+
+    auto *startSpin = new QDoubleSpinBox();
+    startSpin->setRange(0.1, 8.0);
+    startSpin->setSingleStep(0.1);
+    startSpin->setValue(1.0);
+    startSpin->setSuffix("x");
+    form->addRow("Start speed", startSpin);
+
+    auto *endSpin = new QDoubleSpinBox();
+    endSpin->setRange(0.1, 8.0);
+    endSpin->setSingleStep(0.1);
+    endSpin->setValue(1.0);
+    endSpin->setSuffix("x");
+    form->addRow("End speed", endSpin);
+
+    auto *hint = new QLabel("Equal start/end speed = constant speed. Different values ramp linearly across the clip. Applies to the selected clip(s), or the clip under the playhead.");
+    hint->setObjectName("MetaData");
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+
+    auto *allCheck = new QCheckBox("Apply to all clips");
+    layout->addWidget(allCheck);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() == QDialog::Accepted) {
+        timeline->applySpeedRampToSelection(startSpin->value(), endSpin->value(), allCheck->isChecked());
+    }
 }
 
 void MainWindow::openSettingsDialog() {
@@ -2016,6 +2352,7 @@ void MainWindow::openSettingsDialog() {
     auto *videoKeyEdit = new QKeySequenceEdit(QKeySequence::fromString(editorSettings.keyExportVideo, QKeySequence::PortableText), keybindTab);
     auto *mutedVideoKeyEdit = new QKeySequenceEdit(QKeySequence::fromString(editorSettings.keyExportMutedVideo, QKeySequence::PortableText), keybindTab);
     auto *cycleAudioKeyEdit = new QKeySequenceEdit(QKeySequence::fromString(editorSettings.keyCycleAudioTrack, QKeySequence::PortableText), keybindTab);
+    auto *addMarkerKeyEdit = new QKeySequenceEdit(QKeySequence::fromString(editorSettings.keyAddMarker, QKeySequence::PortableText), keybindTab);
     keybindForm->addRow("Play / pause", playPauseKeyEdit);
     keybindForm->addRow("Split clip", splitKeyEdit);
     keybindForm->addRow("Delete clip", deleteKeyEdit);
@@ -2030,6 +2367,7 @@ void MainWindow::openSettingsDialog() {
     keybindForm->addRow("Export video", videoKeyEdit);
     keybindForm->addRow("Export muted video", mutedVideoKeyEdit);
     keybindForm->addRow("Cycle audio track", cycleAudioKeyEdit);
+    keybindForm->addRow("Add/remove marker", addMarkerKeyEdit);
     auto *keybindResetBtn = makeResetButton(keybindTab);
     keybindForm->addRow(keybindResetBtn);
     addSettingsPage(keybindTab, "Keybinds");
@@ -2223,6 +2561,7 @@ void MainWindow::openSettingsDialog() {
         videoKeyEdit->setKeySequence(QKeySequence::fromString(defaults.keyExportVideo, QKeySequence::PortableText));
         mutedVideoKeyEdit->setKeySequence(QKeySequence::fromString(defaults.keyExportMutedVideo, QKeySequence::PortableText));
         cycleAudioKeyEdit->setKeySequence(QKeySequence::fromString(defaults.keyCycleAudioTrack, QKeySequence::PortableText));
+        addMarkerKeyEdit->setKeySequence(QKeySequence::fromString(defaults.keyAddMarker, QKeySequence::PortableText));
     });
     connect(exportResetBtn, &QPushButton::clicked, &dialog, [=]() {
         const TimelineWidget::ExportSettings defaults;
@@ -2343,6 +2682,7 @@ void MainWindow::openSettingsDialog() {
             videoKeyEdit->setKeySequence(QKeySequence::fromString(keybinds.value("exportVideo").toString(), QKeySequence::PortableText));
             mutedVideoKeyEdit->setKeySequence(QKeySequence::fromString(keybinds.value("exportMutedVideo").toString(), QKeySequence::PortableText));
             cycleAudioKeyEdit->setKeySequence(QKeySequence::fromString(keybinds.value("cycleAudioTrack").toString(), QKeySequence::PortableText));
+            addMarkerKeyEdit->setKeySequence(QKeySequence::fromString(keybinds.value("addMarker").toString(), QKeySequence::PortableText));
         }
         if (!exportObj.isEmpty()) {
             exportDirEdit->setText(exportObj.value("exportDirectory").toString(exportDirEdit->text()));
@@ -2440,7 +2780,8 @@ void MainWindow::openSettingsDialog() {
             {"exportAudio", audioKeyEdit->keySequence().toString(QKeySequence::PortableText)},
             {"exportVideo", videoKeyEdit->keySequence().toString(QKeySequence::PortableText)},
             {"exportMutedVideo", mutedVideoKeyEdit->keySequence().toString(QKeySequence::PortableText)},
-            {"cycleAudioTrack", cycleAudioKeyEdit->keySequence().toString(QKeySequence::PortableText)}
+            {"cycleAudioTrack", cycleAudioKeyEdit->keySequence().toString(QKeySequence::PortableText)},
+            {"addMarker", addMarkerKeyEdit->keySequence().toString(QKeySequence::PortableText)}
         };
         root["export"] = QJsonObject{
             {"exportDirectory", exportDirEdit->text()},
@@ -2541,6 +2882,7 @@ void MainWindow::openSettingsDialog() {
     editorSettings.keyExportVideo = videoKeyEdit->keySequence().toString(QKeySequence::PortableText);
     editorSettings.keyExportMutedVideo = mutedVideoKeyEdit->keySequence().toString(QKeySequence::PortableText);
     editorSettings.keyCycleAudioTrack = cycleAudioKeyEdit->keySequence().toString(QKeySequence::PortableText);
+    editorSettings.keyAddMarker = addMarkerKeyEdit->keySequence().toString(QKeySequence::PortableText);
 
     TimelineWidget::PlaybackSettings updatedPlayback = timeline->getPlaybackSettings();
     updatedPlayback.majorSeekMs = majorSeekSpin->value();

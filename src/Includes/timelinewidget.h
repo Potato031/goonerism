@@ -19,6 +19,7 @@
 #include <QStyle>
 #include <QString>
 #include <QQueue>
+#include <QColor>
 #include "mediaSource.h"
 
 class QProcess;
@@ -72,6 +73,10 @@ public:
         float cropBottom = 1.0f;
         float cropLeft = 0.0f;
         float cropRight = 1.0f;
+        // Linear playback speed ramp across the segment; equal values (the
+        // default) mean plain constant-speed playback.
+        float speedStart = 1.0f;
+        float speedEnd = 1.0f;
     };
 
     // A media file placed on the timeline. sources[0] is the primary file;
@@ -86,18 +91,29 @@ public:
     };
 
     // A time-ranged effect clip that lives on its own lane above the video
-    // track (blur / pixelate / blackout region, or a text overlay).
+    // track (blur / pixelate / blackout region, text, shape/arrow annotation,
+    // or a color-correction region).
     struct OverlayClip {
-        int type = 0;           // 0 blur, 1 pixelate, 2 blackout, 3 text
+        int type = 0;           // 0 blur, 1 pixelate, 2 blackout, 3 text, 4 shape, 5 colorcorrect
         qint64 startMs = 0;     // timeline time
         qint64 endMs = 0;
         float l = 0.4f, t = 0.4f, r = 0.6f, b = 0.6f; // region on the video, normalized
         QString text;           // only for type 3
+        // type 4 (shape/arrow annotation)
+        int shapeKind = 0;      // 0 rectangle, 1 ellipse, 2 arrow
+        QColor shapeColor = QColor(255, 255, 255);
+        int shapeThickness = 4;
+        // type 5 (color correction)
+        float brightness = 0.0f; // -1..1
+        float contrast = 1.0f;   // 0..2
+        float saturation = 1.0f; // 0..2
     };
 
     QList<SourceClip> sources;
     QList<OverlayClip> overlays;
     int selectedOverlayIdx = -1;
+    QList<qint64> markers;
+    void toggleMarkerAtPlayhead();
 
     explicit TimelineWidget(QWidget* parent = nullptr);
 
@@ -114,8 +130,10 @@ public:
     float cropTop = 0.0f, cropBottom = 1.0f, cropLeft = 0.0f, cropRight = 1.0f;
     void undo();
     void redo();
+    QStringList undoHistoryLabels() const; // oldest..most-recent-past
+    QStringList redoHistoryLabels() const; // nearest-future..farthest-future
     void splitAtPlayhead();
-    void requestSplit() { saveState(); splitAtPlayhead(); }
+    void requestSplit() { saveState("Split clip"); splitAtPlayhead(); }
     void deleteSelectedSegment();
     void deleteActiveSelection();
     void validatePlayheadPosition();
@@ -171,6 +189,7 @@ public:
     void applyCurrentVisualsToSelection(bool allSegments);
     void clearVisualsForSelection(bool allSegments);
     bool visualStateForCurrentContext(float &t, float &b, float &l, float &r) const;
+    void applySpeedRampToSelection(float speedStart, float speedEnd, bool allSegments);
     static void showNotification(const QString &message);
     QColor m_accentColor = QColor("#3D5AFE"); // Defaults in case QSS fails
     QColor m_secondaryColor = QColor("#FF3232");
@@ -199,6 +218,7 @@ signals:
     void zoomChanged(double zoomFactor);
     void overlaysChanged();
     void requestEditTextOverlay(int index);
+    void requestEditOverlayProperties(int index);
     void sourceAppended(const QString &path);
     void exportStarted(const QString &label);
     void exportProgress(int percent);
@@ -234,6 +254,8 @@ private:
     struct TimelineState {
         QList<Segment> segments;
         QList<OverlayClip> overlays;
+        QList<qint64> markers;
+        QString label;
     };
 
     QList<Segment> segments;
@@ -251,8 +273,9 @@ private:
     int overlayDragIdx = -1;
     qint64 overlayDragGrabOffsetMs = 0;
     int overlayIndexAt(const QPoint &pos, OverlayDragMode *edge = nullptr) const;
+    qint64 snappedTime(qint64 t, double pxPerMs) const;
 
-    void saveState();
+    void saveState(const QString &label = QString());
 
     QMediaPlayer* thumbPlayer;
     QVideoSink* videoSink;

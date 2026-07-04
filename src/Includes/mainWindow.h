@@ -27,8 +27,10 @@
 #include <QList>
 #include <QSplitter>
 #include <QCloseEvent>
+#include <QResizeEvent>
 #include <QStringList>
 #include <QIcon>
+#include "titlebar.h"
 
 class QHBoxLayout;
 class QShortcut;
@@ -55,7 +57,7 @@ public:
         QString importButtonText = "IMPORT";
         int sidebarWidth = 260;
         QString sidebarPosition = "left";
-        QString toolButtonOrder = "text,blur,pixel,blackout,autocut,settings,resetcrop";
+        QString toolButtonOrder = "text,blur,pixel,blackout,shape,colorcorrect,autocut,settings,resetcrop,speedramp";
         float defaultCropTop = 0.03f;
         float defaultCropBottom = 0.96f;
         float defaultCropLeft = 0.0f;
@@ -106,6 +108,7 @@ public:
         QString keyExportVideo = "Ctrl+C";
         QString keyExportMutedVideo = "Ctrl+Alt+C";
         QString keyCycleAudioTrack = "Alt+A";
+        QString keyAddMarker = "M";
         QStringList autoLoadDirectories;
     };
 
@@ -123,6 +126,7 @@ private slots:
 private:
     bool isVideoFullscreen = false;
     void setupUi();
+    void setupTitleBar();
     void setupToolbar();
     void setupSidebar();
     void setupWorkspace();
@@ -145,11 +149,17 @@ private:
     // Overlay clip <-> preview sync (regions shown/edited on the video)
     void syncOverlaysToPreview();
     void editTextOverlay(int index);
+    void editOverlayProperties(int index);
+    void openSpeedRampDialog();
+    void showHistoryMenu();
     // Multi-source playback: seek in timeline time, switching files as needed
     void seekTimeline(qint64 timelinePosMs);
     void updateTimelineChips();
     QLineEdit* exportInput;
     QVBoxLayout* mainLayout;
+    TitleBar* titleBar;
+    QList<ResizeGrip*> resizeGrips;
+    void updateMaximizedState();
     QFrame* toolbar;
     QFrame* footer;
     QWidget* timelineTools;
@@ -191,6 +201,7 @@ private:
     QPushButton* sidebarImportBtn;
     QPushButton* undoBtn;
     QPushButton* redoBtn;
+    QPushButton* historyBtn;
     QPushButton* splitBtn;
     QPushButton* deleteClipBtn;
     // Cached icons that swap at runtime
@@ -221,6 +232,9 @@ private:
     QPushButton *pixelBtn;
     QPushButton *solidBtn;
     QPushButton *textBtn;
+    QPushButton *shapeBtn;
+    QPushButton *colorCorrectBtn;
+    QPushButton *speedRampBtn;
     QFrame* clipSidebar;
     QScrollArea* sidebarScroll;
     QWidget* sidebarContent;
@@ -244,6 +258,8 @@ private:
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override; // RIGHT
     void closeEvent(QCloseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+    void changeEvent(QEvent *event) override;
 };
 
 #endif //SIMPLEVIDEOEDITOR_MAINWINDOW_H
