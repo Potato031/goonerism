@@ -18,6 +18,9 @@ export LDAI_OUTPUT=potatoeditor.AppImage
 export LINUXDEPLOY_OUTPUT_VERSION=${APPIMAGE_VERSION:-development}
 export QMAKE=${QMAKE:-$(command -v qmake6 || command -v qmake)}
 
+# The source icon is 144px; desktop icon themes require a standard size.
+ffmpeg -v error -y -i "$project_dir/potato.png" -vf scale=128:128 -frames:v 1 potato.png
+
 # Qt's FFmpeg backend loads codec libraries at runtime. Deploy those shipped
 # with this Qt build as well as the command-line tools used by the editor.
 qt_lib_dir=$("$QMAKE" -query QT_INSTALL_LIBS)
@@ -32,7 +35,7 @@ done
     --executable "$(command -v ffmpeg)" \
     --executable "$(command -v ffprobe)" \
     --desktop-file "$project_dir/packaging/PotatoEditor.desktop" \
-    --icon-file "$project_dir/potato.png" \
+    --icon-file "$package_dir/potato.png" \
     "${codec_args[@]}" --plugin qt --output appimage
 
 test -s potatoeditor.AppImage
