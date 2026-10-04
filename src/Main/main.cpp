@@ -15,6 +15,10 @@
 
 int main(int argc, char *argv[]) {
     qputenv("QT_MULTIMEDIA_PREFERRED_PLUGINS", "ffmpeg");
+    // Prefer the installed NVIDIA decoder; Qt will still fall back safely for
+    // codecs or systems where CUDA decoding is unavailable.
+    if (qEnvironmentVariableIsEmpty("QT_FFMPEG_DECODING_HW_DEVICE_TYPES"))
+        qputenv("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", "cuda");
 
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("Potatoes");

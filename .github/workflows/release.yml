@@ -23,7 +23,7 @@ jobs:
 
       - name: Build with CMake
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           cmake --build build --config Release
 
       - name: Package Windows
@@ -36,14 +36,14 @@ jobs:
           Compress-Archive -Path * -DestinationPath ../../PotatoEditor_windows.zip
 
       - name: Upload Windows Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: PotatoEditor_windows.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -52,7 +52,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1-mesa-dev libpulse-dev libasound2-dev \
-          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxcb-cursor0
+          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxcb-cursor0 \
+          ffmpeg patchelf desktop-file-utils
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -63,40 +64,17 @@ jobs:
 
       - name: Build with CMake
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           cmake --build build
 
       - name: Package Linux (AppImage)
-        run: |
-          wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-          chmod +x linuxdeploy*.AppImage
-          
-          wget -O icon.png https://github.com/github.png?size=128
-          
-          mkdir -p AppDir
-          cp build/PotatoEditor AppDir/
-          
-          echo "[Desktop Entry]" > PotatoEditor.desktop
-          echo "Type=Application" >> PotatoEditor.desktop
-          echo "Name=PotatoEditor" >> PotatoEditor.desktop
-          echo "Exec=PotatoEditor" >> PotatoEditor.desktop
-          echo "Icon=icon" >> PotatoEditor.desktop
-          echo "Categories=Development;" >> PotatoEditor.desktop
-          
-          export LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
-          export LDAI_OUTPUT="potatoeditor.AppImage"
-          
-          ./linuxdeploy-x86_64.AppImage --appdir AppDir \
-            -e AppDir/PotatoEditor \
-            -d PotatoEditor.desktop \
-            -i icon.png \
-            --plugin qt \
-            --output appimage
+        env:
+          APPIMAGE_VERSION: ${{ github.ref_name }}
+        run: bash scripts/package-appimage.sh "$PWD/build" "$PWD/appimage-build"
 
       - name: Upload Linux Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: potatoeditor.AppImage
+          files: appimage-build/potatoeditor.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

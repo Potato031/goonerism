@@ -11,9 +11,19 @@ void TimelineWidget::mousePressEvent(QMouseEvent* e) {
 
     activeEdge = None;
     activeSegmentIdx = -1;
+    trimDragSaved = false;
     isScrubbing = false;
     overlayDrag = OvNone;
     overlayDragIdx = -1;
+
+    if (e->button() == Qt::LeftButton && e->position().y() < rulerHeight) {
+        isScrubbing = true;
+        currentPosMs = qBound<qint64>(0, clickTime, durationMs);
+        emitVisualStateForCurrentContext();
+        emit playheadMoved(currentPosMs);
+        update();
+        return;
+    }
 
     // --- Overlay lanes take priority: they sit above the video track ---
     {
@@ -89,6 +99,8 @@ void TimelineWidget::mousePressEvent(QMouseEvent* e) {
     }
 
     if (clickedIdx != -1) {
+        selectedOverlayIdx = -1;
+        emit overlaysChanged();
         if (e->modifiers() & Qt::ControlModifier) {
             if (selectedSegmentIndices.contains(clickedIdx)) selectedSegmentIndices.remove(clickedIdx);
             else selectedSegmentIndices.insert(clickedIdx);
@@ -127,8 +139,7 @@ void TimelineWidget::showClipContextMenu(const QPoint &globalPos, qint64 clickTi
 
     if (chosen == splitAction) {
         currentPosMs = qBound(0LL, clickTime, durationMs);
-        saveState("Split clip");
-        splitAtPlayhead();
+        requestSplit();
         return;
     }
 
@@ -150,6 +161,7 @@ void TimelineWidget::showClipContextMenu(const QPoint &globalPos, qint64 clickTi
 }
 
 void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
+    if (durationMs <= 0 || segments.isEmpty()) return;
     const int drawX = e->position().x() - sidebarWidth + scrollOffset;
     const double pxPerMs = static_cast<double>(width() - sidebarWidth) * zoomFactor / durationMs;
 
@@ -253,7 +265,8 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
         return;
     }
 
-    if (activeEdge != None && activeSegmentIdx != -1) {
+    if (activeEdge != None && activeSegmentIdx >= 0 && activeSegmentIdx < segments.size()) {
+        if (!trimDragSaved) { saveState("Trim clip"); trimDragSaved = true; }
         const qint64 newTime = snappedTime(qBound(0LL, static_cast<qint64>(drawX / pxPerMs), durationMs), pxPerMs);
         const qint64 minSegmentDuration = playbackSettings.minSegmentDurationMs;
         if (activeEdge == Start) {
@@ -282,10 +295,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* e) {
         emit overlaysChanged();
     }
 
-    if (activeEdge != None) {
-        saveState("Trim clip");
-        emit clipTrimmed();
-    }
+    if (activeEdge != None && trimDragSaved) emit clipTrimmed();
 
     if (e->button() == Qt::RightButton) {
         isSelecting = false;
@@ -294,11 +304,13 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* e) {
 
     activeEdge = None;
     activeSegmentIdx = -1;
+    trimDragSaved = false;
     isScrubbing = false;
     unsetCursor();
 }
 
 void TimelineWidget::wheelEvent(QWheelEvent *e) {
+    if (durationMs <= 0) { e->ignore(); return; }
     const int viewWidth = width() - sidebarWidth;
 
     if (e->modifiers() & Qt::ShiftModifier) {
@@ -324,6 +336,7 @@ void TimelineWidget::wheelEvent(QWheelEvent *e) {
             }
         }
 
+        if (!targets.isEmpty()) saveState("Change clip gain");
         float delta = (e->angleDelta().y() > 0 ? 0.1f : -0.1f);
         for (int idx : targets) {
             segments[idx].gain = qBound(0.0f, segments[idx].gain + delta, 5.0f);

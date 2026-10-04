@@ -2,11 +2,38 @@
 #define SIMPLEVIDEOEDITOR_MEDIAUTILS_H
 
 #include <QFileInfo>
+#include <QCryptographicHash>
+#include <QStandardPaths>
+#include <QDateTime>
+#include <QDir>
 #include <QMimeDatabase>
 #include <QString>
 #include <QStringList>
+#include <QProcess>
+#ifdef Q_OS_UNIX
+#include <unistd.h>
+#endif
 
 namespace MediaUtils {
+
+inline void prioritizeInteractivePlayback(QProcess *backgroundProcess) {
+#ifdef Q_OS_UNIX
+    // Adjust only the decoder child; playback and the UI retain normal priority.
+    backgroundProcess->setChildProcessModifier([] { (void)::nice(10); });
+#else
+    Q_UNUSED(backgroundProcess);
+#endif
+}
+
+inline QString previewCachePath(const QString &path) {
+    const QFileInfo info(path);
+    const QByteArray identity = (info.absoluteFilePath() + ":" + QString::number(info.size()) +
+                                ":" + QString::number(info.lastModified().toMSecsSinceEpoch())).toUtf8();
+    const QString directory = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/previews";
+    QDir().mkpath(directory);
+    return directory + "/" + QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex() + ".jpg";
+}
+
 
 inline QStringList knownVideoExtensions() {
     return {

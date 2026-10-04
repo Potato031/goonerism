@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Potato Studio
+Comment=Edit videos, audio, and overlay effects
+Exec=PotatoEditor
+Icon=potato
+Categories=AudioVideo;Video;AudioVideoEditing;
+Terminal=false

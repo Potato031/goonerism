@@ -14,9 +14,7 @@ find_package(Qt6 REQUIRED COMPONENTS
         Concurrent
 )
 
-add_executable(PotatoEditor
-        src/Main/main.cpp
-        resources.qrc
+add_library(PotatoEditorCore STATIC
         src/Includes/timelinewidget.h
         src/Main/timelinewidget.cpp
         src/Includes/titlebar.h
@@ -31,6 +29,7 @@ add_executable(PotatoEditor
         src/Includes/mediaSource.h
         src/Includes/dropFilter.h
         src/Main/mainWindow.cpp
+        src/Main/commands.cpp
         src/Includes/resizeFilter.h
         src/Includes/mainWindow.h
         src/Main/updater.cpp
@@ -41,13 +40,23 @@ add_executable(PotatoEditor
         src/Includes/overlayShapes.h
 )
 
-if(WIN32)
-    set_target_properties(PotatoEditor PROPERTIES WIN32_EXECUTABLE TRUE)
-endif()
-
-target_link_libraries(PotatoEditor
+target_link_libraries(PotatoEditorCore PUBLIC
         Qt6::Widgets
         Qt6::Multimedia
         Qt6::MultimediaWidgets
         Qt6::Concurrent
 )
+add_executable(PotatoEditor src/Main/main.cpp resources.qrc)
+target_link_libraries(PotatoEditor PRIVATE PotatoEditorCore)
+if(WIN32)
+    set_target_properties(PotatoEditor PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    find_package(Qt6 REQUIRED COMPONENTS Test)
+    add_executable(EditorTests tests/editor_tests.cpp resources.qrc)
+    target_link_libraries(EditorTests PRIVATE PotatoEditorCore Qt6::Test)
+    add_test(NAME editor-regressions COMMAND EditorTests)
+    set_tests_properties(editor-regressions PROPERTIES TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_FFMPEG_DECODING_HW_DEVICE_TYPES=")
+endif()

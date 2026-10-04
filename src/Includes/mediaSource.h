@@ -13,6 +13,7 @@
 #include <QList>
 #include <QString>
 #include <QtConcurrent>
+#include <QFutureWatcher>
 #include <QMutex>
 #include <QMimeData>
 #include <QDragEnterEvent>
@@ -60,19 +61,29 @@ public:
 
     // PERFORMANCE: Atomic flag and mutex for off-thread frame processing
     QAtomicInt m_isProcessing{0};
+    QAtomicInt m_isPlaying{0};
+    bool m_nativePresentationActive = true;
     // Set when a rescale request arrives while the worker is busy, so the
     // last request is never silently dropped (matters when paused: no new
     // frame would ever re-trigger the composite).
     QAtomicInt m_pendingRescale{0};
     QMutex m_frameMutex;
     QVideoFrame m_lastRawFrame;
+    quint64 frameGeneration = 0;
 
     explicit VideoWithCropWidget(QWidget* parent = nullptr) : QWidget(parent) {
-        sink = new QVideoSink(this);
+        sink = nullptr;
         setMouseTracking(true);
         setFocusPolicy(Qt::StrongFocus);
         setAcceptDrops(true); // effect buttons can be dragged straight onto the video
-        this->setAttribute(Qt::WA_StyledBackground, true);
+        setAttribute(Qt::WA_TranslucentBackground, true);
+        setAttribute(Qt::WA_OpaquePaintEvent, false);
+        setAutoFillBackground(false);
+    }
+
+    void attachVideoSink(QVideoSink *videoSink) {
+        if (!videoSink || sink == videoSink) return;
+        sink = videoSink;
 
         connect(sink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame){
             if (!frame.isValid()) return;
@@ -81,9 +92,32 @@ public:
                 QMutexLocker locker(&m_frameMutex);
                 m_lastRawFrame = frame;
             }
+            const bool dimensionsChanged = property("actualWidth").toInt() != frame.width() ||
+                                           property("actualHeight").toInt() != frame.height();
+            if (dimensionsChanged) {
+                setProperty("actualWidth", frame.width());
+                setProperty("actualHeight", frame.height());
+            }
 
-            triggerScale();
+            // Let QVideoWidget present untouched footage directly. CPU compositing
+            // is only required when preview effects must be baked into the frame.
+            if (m_nativePresentationActive && !requiresCompositedPreview()) {
+                if (dimensionsChanged) update();
+            } else triggerScale();
         });
+    }
+
+    bool requiresCompositedPreview() const {
+        return !filterObjects.isEmpty();
+    }
+
+    QImage sourceFrameImage() {
+        QVideoFrame frame;
+        {
+            QMutexLocker locker(&m_frameMutex);
+            frame = m_lastRawFrame;
+        }
+        return frame.isValid() ? frame.toImage() : QImage();
     }
 
     // Per-pixel brightness/contrast/saturation, applied in place to a cropped
@@ -181,37 +215,57 @@ public:
         }
         const QList<FilterObject> filtersSnapshot = filterObjects;
 
-        (void)QtConcurrent::run(QThreadPool::globalInstance(), [this, targetSize, filtersSnapshot]() {
-            QVideoFrame localFrame;
-            {
-                QMutexLocker locker(&m_frameMutex);
-                localFrame = m_lastRawFrame;
-            }
-
-            QImage sourceImage = localFrame.toImage();
-            if (sourceImage.isNull()) {
-                m_isProcessing = 0;
-                return;
-            }
-
-            const int sourceWidth = sourceImage.width();
-            const int sourceHeight = sourceImage.height();
-            QImage img = sourceImage.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            compositeFilters(img, filtersSnapshot);
-
-            {
-                QMutexLocker locker(&m_frameMutex);
-                lastFrame = img;
-            }
-
+        QVideoFrame localFrame;
+        {
+            QMutexLocker locker(&m_frameMutex);
+            localFrame = m_lastRawFrame;
+        }
+        const auto generation = frameGeneration;
+        const bool playing = m_isPlaying.loadRelaxed() != 0;
+        auto *watcher = new QFutureWatcher<QImage>(this);
+        connect(watcher, &QFutureWatcher<QImage>::finished, this, [this, watcher, generation]() {
+            const QImage result = watcher->result();
+            watcher->deleteLater();
             m_isProcessing = 0;
-            QMetaObject::invokeMethod(this, [this, sourceWidth, sourceHeight]() {
-                setProperty("actualWidth", sourceWidth);
-                setProperty("actualHeight", sourceHeight);
-                update();
-                if (m_pendingRescale.fetchAndStoreRelaxed(0)) triggerScale();
-            }, Qt::QueuedConnection);
+            if (generation == frameGeneration && !result.isNull()) {
+                QMutexLocker locker(&m_frameMutex);
+                lastFrame = result;
+            }
+            update();
+            if (m_pendingRescale.fetchAndStoreRelaxed(0)) triggerScale();
         });
+        // The worker owns its inputs and never touches the widget. Closing the
+        // window or changing media while compositing cannot access freed state.
+        watcher->setFuture(QtConcurrent::run([localFrame, targetSize, filtersSnapshot, playing]() mutable {
+            QImage image = localFrame.toImage();
+            if (image.isNull()) return QImage();
+            image = image.scaled(targetSize, Qt::KeepAspectRatio,
+                                 playing ? Qt::FastTransformation : Qt::SmoothTransformation);
+            compositeFilters(image, filtersSnapshot);
+            return image;
+        }));
+    }
+
+    void resetFrame() {
+        ++frameGeneration;
+        QMutexLocker locker(&m_frameMutex);
+        m_lastRawFrame = QVideoFrame();
+        lastFrame = QImage();
+        setProperty("actualWidth", 0);
+        setProperty("actualHeight", 0);
+        m_pendingRescale = 0;
+        update();
+    }
+
+    void setPlaybackActive(bool playing) {
+        m_isPlaying.storeRelaxed(playing ? 1 : 0);
+        if (!playing) triggerScale();
+    }
+
+    void setNativePresentationActive(bool active) {
+        m_nativePresentationActive = active;
+        if (!active) triggerScale();
+        update();
     }
 
     void setPlaceholderState(const QString &title, const QString &body) {
@@ -221,10 +275,19 @@ public:
     }
 
     QRect calculateTargetRect() {
-        QRect bounds = rect().adjusted(10, 10, -10, -10);
-        if (lastFrame.isNull()) return bounds;
+        // Match QVideoWidget's full-viewport KeepAspectRatio geometry exactly.
+        // Any inset here causes a visible zoom jump when switching between the
+        // native and composited preview paths at an overlay boundary.
+        QRect bounds = rect();
+        int frameWidth = lastFrame.width();
+        int frameHeight = lastFrame.height();
+        if (frameWidth <= 0 || frameHeight <= 0) {
+            frameWidth = property("actualWidth").toInt();
+            frameHeight = property("actualHeight").toInt();
+        }
+        if (frameWidth <= 0 || frameHeight <= 0) return bounds;
 
-        const float imgRatio = static_cast<float>(lastFrame.width()) / qMax(1, lastFrame.height());
+        const float imgRatio = static_cast<float>(frameWidth) / qMax(1, frameHeight);
         const float boundsRatio = static_cast<float>(bounds.width()) / qMax(1, bounds.height());
 
         if (imgRatio > boundsRatio) {
@@ -242,11 +305,10 @@ public:
                      bounds.height());
     }
 
-    QRect displayedFrameRect(const QRect &targetRect, const QImage &frame) const {
-        if (frame.isNull()) return targetRect;
-        const int xOffset = (targetRect.width() - frame.width()) / 2;
-        const int yOffset = (targetRect.height() - frame.height()) / 2;
-        return QRect(targetRect.topLeft() + QPoint(xOffset, yOffset), frame.size());
+    QRect displayedFrameRect(const QRect &targetRect, const QImage &) const {
+        // Keep the image and editing handles fitted during an asynchronous
+        // resize; the worker replaces this temporary scale with a sharp frame.
+        return targetRect;
     }
 
     // Static buffer to avoid allocation jitter at 60fps
@@ -281,7 +343,6 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         p.setRenderHint(QPainter::SmoothPixmapTransform, false);
-        p.fillRect(rect(), m_backgroundColor);
 
         QImage frameToDraw;
         {
@@ -289,8 +350,15 @@ protected:
             frameToDraw = lastFrame;
         }
 
-        if (frameToDraw.isNull()) {
-            // ... (title drawing logic remains same)
+        QVideoFrame rawFrame;
+        {
+            QMutexLocker locker(&m_frameMutex);
+            rawFrame = m_lastRawFrame;
+        }
+
+        if (!rawFrame.isValid() && frameToDraw.isNull()) {
+            p.fillRect(rect(), m_backgroundColor);
+            if (property("showEmptyPanel").toBool()) return;
             QFont titleFont = p.font();
             titleFont.setPointSize(16);
             titleFont.setBold(true);
@@ -303,16 +371,22 @@ protected:
             bodyFont.setBold(false);
             p.setFont(bodyFont);
             p.setPen(m_accentColor.darker(120));
-            p.drawText(rect().adjusted(44, 48, -44, 26), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, emptyStateBody);
+            p.setPen(QColor("#A1A1A7"));
+            p.drawText(QRect(32, height() / 2 + 16, qMax(0, width() - 64), 72), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, emptyStateBody);
             return;
         }
 
         QRect tr = calculateTargetRect();
-        const QRect imageRect = displayedFrameRect(tr, frameToDraw);
+        const bool drawEditorFrame = !m_nativePresentationActive && !frameToDraw.isNull();
+        const QRect imageRect = drawEditorFrame ? displayedFrameRect(tr, frameToDraw) : tr;
 
         // NOTE: frameToDraw already has blur/pixelate/blackout boxes baked in by the
         // background worker (see triggerScale/compositeFilters) so painting stays cheap.
-        p.drawImage(imageRect.topLeft(), frameToDraw);
+        if (drawEditorFrame) p.drawImage(imageRect, frameToDraw);
+
+        // Playback shows the finished composition only. Editing chrome returns
+        // immediately on pause, matching the behavior of full NLE viewers.
+        if (m_isPlaying.loadRelaxed() != 0) return;
 
         const int cropX = imageRect.x() + qRound(cropL * imageRect.width());
         const int cropY = imageRect.y() + qRound(cropT * imageRect.height());

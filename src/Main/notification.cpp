@@ -16,7 +16,13 @@ void TimelineWidget::showProgressNotification(QProcess* process, qint64 totalMs,
     Q_UNUSED(showCompletionToast);
     process->setProcessChannelMode(QProcess::MergedChannels);
 
-    emit exportStarted("EXPORTING");
+    emit exportStarted("Exporting…");
+    connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
+        if (error != QProcess::FailedToStart) return;
+        isExporting = false;
+        emit exportFinished(false, "Cannot start ffmpeg. Check that it is installed.");
+        process->deleteLater();
+    });
 
     connect(process, &QProcess::readyRead, this, [this, process, totalMs]() {
         QString data = process->readAll();

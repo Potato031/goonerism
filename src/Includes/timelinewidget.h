@@ -20,12 +20,14 @@
 #include <QString>
 #include <QQueue>
 #include <QColor>
+#include <QElapsedTimer>
 #include "mediaSource.h"
 
 class QProcess;
 
 class TimelineWidget : public QWidget {
     Q_OBJECT
+    friend class EditorTests;
     Q_PROPERTY(QColor accentColor MEMBER m_accentColor)
    Q_PROPERTY(QColor secondaryColor MEMBER m_secondaryColor)
    Q_PROPERTY(QColor backgroundColor MEMBER m_backgroundColor)
@@ -116,10 +118,12 @@ public:
     void toggleMarkerAtPlayhead();
 
     explicit TimelineWidget(QWidget* parent = nullptr);
+    ~TimelineWidget() override;
 
     void setMediaSource(const QUrl &url);
     void setDuration(qint64 ms);
     void setCurrentPosition(qint64 ms);
+    void setPlaybackActive(bool active) { playbackActive = active; }
 
     int currentAudioTrack = 0;
     int totalAudioTracks = 1;
@@ -133,7 +137,9 @@ public:
     QStringList undoHistoryLabels() const; // oldest..most-recent-past
     QStringList redoHistoryLabels() const; // nearest-future..farthest-future
     void splitAtPlayhead();
-    void requestSplit() { saveState("Split clip"); splitAtPlayhead(); }
+    void requestSplit() { splitAtPlayhead(); }
+    bool canUndo() const { return !undoStack.isEmpty(); }
+    bool canRedo() const { return !redoStack.isEmpty(); }
     void deleteSelectedSegment();
     void deleteActiveSelection();
     void validatePlayheadPosition();
@@ -216,6 +222,7 @@ signals:
     void mediaProbingFinished();
     void visualStateChanged(float t, float b, float l, float r);
     void zoomChanged(double zoomFactor);
+    void historyChanged();
     void overlaysChanged();
     void requestEditTextOverlay(int index);
     void requestEditOverlayProperties(int index);
@@ -255,6 +262,8 @@ private:
         QList<Segment> segments;
         QList<OverlayClip> overlays;
         QList<qint64> markers;
+        QList<SourceClip> sources;
+        qint64 durationMs = 0;
         QString label;
     };
 
@@ -282,10 +291,17 @@ private:
     QMap<int, QImage> thumbnailCache;
     // Filmstrip images (10 tiled frames) for appended sources, keyed by source index
     QMap<int, QImage> sourceFilmstrips;
+    QSet<int> pendingFilmstrips;
     void ensureSourceFilmstrip(int sourceIdx);
     QQueue<int> thumbnailRequestQueue;
     bool thumbnailRequestActive = false;
     QVector<float> audioSamples;
+    quint64 mediaGeneration = 0;
+    quint64 waveformGeneration = 0;
+    quint64 editRevision = 0;
+    bool autoCutBusy = false;
+    void loadAudioWaveform(const QString &path, qint64 offsetMs, int track, quint64 trackGeneration);
+
     QUrl currentFileUrl;
     qint64 originalFileSize = 0;
     float maxAmplitude = 0.01f;
@@ -300,6 +316,7 @@ private:
     enum Edge { None, Start, End };
     Edge activeEdge = None;
     int activeSegmentIdx = -1;
+    bool trimDragSaved = false;
 
 
     float pulseAlpha = 1.0f;
@@ -311,6 +328,8 @@ private:
     QSet<int> preSelectSnapshot;
     bool isExporting = false;
     bool isScrubbing = false;
+    bool playbackActive = false;
+    QElapsedTimer repaintClock;
 
     QStringList trackNames = {
         "All audio", "All discord audio + mic", "Only discord audio",

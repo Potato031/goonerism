@@ -7,7 +7,7 @@
 #include <QStandardPaths>
 
 inline QString appSettingsFilePath() {
-    QString baseDir = QDir::homePath() + "/.config/PotatoEditor";
+    QString baseDir = qEnvironmentVariable("POTATO_EDITOR_SETTINGS_DIR", QDir::homePath() + "/.config/PotatoEditor");
     QDir().mkpath(baseDir);
     return baseDir + "/settings.ini";
 }

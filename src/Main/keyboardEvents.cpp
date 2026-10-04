@@ -90,8 +90,7 @@ bool TimelineWidget::handleGlobalKey(QKeyEvent *event) {
         return true;
     }
     if (matchesShortcut(event, editorSettings.keySplit)) {
-        saveState("Split clip");
-        splitAtPlayhead();
+        requestSplit();
         return true;
     }
     if (matchesShortcut(event, editorSettings.keyDeleteClip) || event->key() == Qt::Key_Backspace) {

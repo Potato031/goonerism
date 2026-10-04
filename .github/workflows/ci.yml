@@ -1,6 +1,7 @@
-name: CI Build
+name: CI Build and AppImage
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
   pull_request:
@@ -22,11 +23,11 @@ jobs:
 
       - name: Build with CMake
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           cmake --build build --config Release
 
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -34,7 +35,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1-mesa-dev libpulse-dev libasound2-dev \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxcb-cursor0
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxcb-cursor0 \
+            ffmpeg patchelf desktop-file-utils
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -46,4 +48,20 @@ jobs:
       - name: Build with CMake
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build
+          cmake --build build --parallel 2
+
+      - name: Run regression tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package AppImage
+        env:
+          APPIMAGE_VERSION: ${{ github.sha }}
+        run: bash scripts/package-appimage.sh "$PWD/build" "$PWD/appimage-build"
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: PotatoEditor-linux-x86_64
+          path: appimage-build/potatoeditor.AppImage
+          if-no-files-found: error
+          retention-days: 30

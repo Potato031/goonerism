@@ -1,23 +1,19 @@
 /* ============================================================
    POTATO STUDIO — base design system
-   Palette:
-     window        #0F0F13   panel        #17171C
-     elevated      #1D1D24   control      #25252D
-     hover         #2E2E38   border       rgba(255,255,255,0.06)
-     text          #EFEFF4   muted        #9C9CA8   faint #6A6A76
-     accent        #FF7A50   accent-hi    #FF8F6A   accent2 #FF5C33
+   Resolve-inspired neutral studio foundation. Runtime theme tokens
+   provide the user-configurable colors after startup.
    ============================================================ */
 
 QWidget {
     background: transparent;
-    color: #EFEFF4;
+    color: #D8D8D8;
     font-size: 12px;
     outline: none;
 }
 
 QToolTip {
-    background: #1D1D24;
-    color: #EFEFF4;
+    background: #303030;
+    color: #D8D8D8;
     border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: 6px;
     padding: 4px 8px;
@@ -26,12 +22,12 @@ QToolTip {
 
 QMainWindow#MainCanvas,
 QWidget#centralWidget {
-    background: #0F0F13;
+    background: #0B0B0C;
 }
 
 QDialog,
 QMessageBox {
-    background: #141419;
+    background: #101011;
 }
 
 /* ---------- Panels ---------- */
@@ -43,13 +39,13 @@ QFrame#PanelHeader,
 QWidget#timelineTools,
 QFrame#ActionStrip,
 QFrame#TimelineShell {
-    background: #17171C;
+    background: #1B1B1D;
     border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 10px;
 }
 
 QFrame#toolbar {
-    background: #131318;
+    background: #18181A;
     border: none;
     border-bottom: 1px solid rgba(0, 0, 0, 0.65);
     border-radius: 0;
@@ -58,22 +54,22 @@ QFrame#toolbar {
 }
 
 QFrame#workspace {
-    background: #141419;
+    background: #101011;
 }
 
 QFrame#VideoContainer {
-    background: #08080A;
+    background: #050505;
     border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 10px;
 }
 
 VideoWithCropWidget#VideoSurface {
-    background: #08080A;
+    background: #050505;
     border: none;
 }
 
 QFrame#TransportBar {
-    background: #1A1A21;
+    background: #1D1D20;
     border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 10px;
     min-height: 52px;
@@ -90,37 +86,37 @@ QLabel#InputLabel {
     color: #6A6A76;
     font-size: 9px;
     font-weight: 700;
-    letter-spacing: 1px;
+    letter-spacing: 0;
 }
 
 QLabel#SectionHeader {
-    color: #9C9CA8;
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 1.6px;
-    padding: 2px 0 4px 0;
+    color: #D0D0D7;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0;
+    padding: 2px 0 5px 0;
 }
 
 QLabel#InspectorGroupLabel {
-    color: #6A6A76;
-    font-size: 9px;
-    font-weight: 800;
-    letter-spacing: 1.3px;
-    padding: 8px 2px 2px 2px;
+    color: #8E8E99;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0;
+    padding: 8px 2px 3px 2px;
 }
 
 QLabel#LogoBold {
     color: #FFFFFF;
     font-size: 15px;
-    font-weight: 900;
-    letter-spacing: 1px;
+    font-weight: 600;
+    letter-spacing: 0;
 }
 
 QLabel#LogoLight {
     color: #FF7A50;
     font-size: 15px;
     font-weight: 700;
-    letter-spacing: 1px;
+    letter-spacing: 0;
 }
 
 QLabel#HeroBody {
@@ -139,15 +135,14 @@ QLabel#TimecodeLabel {
     padding: 4px 10px;
 }
 
-QLabel#CurrentMediaPill,
 QLabel#MiniBadge {
-    background: rgba(255, 122, 80, 0.08);
-    border: 1px solid rgba(255, 122, 80, 0.22);
-    border-radius: 999px;
-    color: #FFB397;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    color: #9C9CA8;
     font-size: 9px;
-    font-weight: 800;
-    letter-spacing: 0.6px;
+    font-weight: 500;
+    letter-spacing: 0;
     padding: 3px 10px;
 }
 
@@ -178,16 +173,16 @@ QLabel#SidebarTitle {
 QLabel#SidebarCountLabel {
     color: #6A6A76;
     font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 0.8px;
+    font-weight: 500;
+    letter-spacing: 0;
     padding: 6px 2px;
 }
 
 QLabel#StatusLabel {
     color: #FF7A50;
-    font-weight: 800;
+    font-weight: 500;
     font-size: 10px;
-    letter-spacing: 0.8px;
+    letter-spacing: 0;
 }
 QLabel#StatusLabel[state="ok"] { color: #3FB68B; }
 QLabel#StatusLabel[state="error"] { color: #E5534B; }
@@ -200,7 +195,7 @@ QProgressBar#ExportProgressBar {
     text-align: center;
     color: #EFEFF4;
     font-size: 9px;
-    font-weight: 800;
+    font-weight: 500;
 }
 QProgressBar#ExportProgressBar::chunk {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF7A50, stop:1 #FF5C33);
@@ -247,8 +242,8 @@ QPushButton#ExportBtn {
     border-radius: 6px;
     color: #1C0E08;
     font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.8px;
+    font-weight: 500;
+    letter-spacing: 0;
     padding: 7px 16px;
 }
 QPushButton#ExportBtn:hover { background: #FF8F6A; }
@@ -283,15 +278,18 @@ QFontComboBox {
 QPushButton#PrimaryGhostBtn,
 QDialogButtonBox QPushButton {
     font-size: 10px;
-    letter-spacing: 0.5px;
+    letter-spacing: 0;
     font-weight: 700;
 }
 
 QPushButton[class="ToolBtn"] {
     font-size: 11px;
     font-weight: 600;
-    padding: 8px 10px;
+    padding: 7px 8px;
     text-align: left;
+    background: transparent;
+    border-color: transparent;
+    border-radius: 3px;
 }
 
 QPushButton#PrimaryGhostBtn:hover,
@@ -435,8 +433,8 @@ QListWidget#SettingsNav::item:selected {
 QLabel#SettingsPageTitle {
     color: #9C9CA8;
     font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 1.6px;
+    font-weight: 500;
+    letter-spacing: 0;
     padding: 2px 0 4px 2px;
 }
 
@@ -451,7 +449,7 @@ QTabBar::tab {
     margin: 2px;
     font-weight: 700;
     font-size: 11px;
-    letter-spacing: 0.4px;
+    letter-spacing: 0;
 }
 QTabBar::tab:selected {
     background: #25252D;
@@ -573,7 +571,7 @@ QLabel#ProgressNotificationLabel {
     color: #EFEFF4;
     font-weight: 700;
     font-size: 10px;
-    letter-spacing: 0.6px;
+    letter-spacing: 0;
 }
 QProgressBar#ProgressNotificationBar {
     background: #101014;
@@ -594,7 +592,7 @@ QWidget#ToastNotification QLabel#ToastLabel {
     background: #FF7A50;
     color: #1C0E08;
     border-radius: 6px;
-    font-weight: 800;
+    font-weight: 500;
     font-size: 11px;
     padding: 8px 14px;
 }
@@ -619,3 +617,20 @@ VideoWithCropWidget {
     qproperty-secondaryColor: #FF5C33;
     qproperty-backgroundColor: #08080A;
 }
+
+/* Compact editor controls; geometry stays consistent at smaller window sizes. */
+QPushButton#EmptyImportBtn { min-height: 32px; padding: 4px 16px; border: 1px solid #55555C; border-radius: 6px; background: #29292C; }
+QPushButton#EmptyImportBtn:hover { background: #39393D; }
+QLineEdit#MediaSearch { min-height: 28px; padding: 2px 8px; }
+QDialog#CommandPalette { border: 1px solid #55555C; }
+QLineEdit#CommandSearch { min-height: 38px; padding: 4px 12px; }
+QListWidget#CommandList { background: transparent; border: none; outline: none; }
+QListWidget#CommandList::item { min-height: 34px; padding: 2px 12px; }
+QListWidget#CommandList::item:selected { background: #39393D; color: #FFFFFF; }
+QPushButton:focus { border: 1px solid #9CB8C4; }
+QPushButton:disabled { color: #727278; }
+QLabel#TimecodeLabel { font-weight: 500; padding: 2px 6px; }
+QScrollArea#ToolScroll { border: none; background: transparent; }
+
+QLabel#EmptyPreviewTitle { font-size: 16px; font-weight: 600; color: #E0E0E2; }
+QLabel#EmptyPreviewBody { color: #A1A1A7; }

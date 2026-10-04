@@ -28,6 +28,7 @@
 #include <QSplitter>
 #include <QCloseEvent>
 #include <QResizeEvent>
+#include <QElapsedTimer>
 #include <QStringList>
 #include <QIcon>
 #include "titlebar.h"
@@ -38,13 +39,16 @@ class QMenu;
 class QComboBox;
 class QAction;
 class QProgressBar;
+class QVideoWidget;
 
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
+    friend class EditorTests;
 public:
     struct EditorSettings {
         bool autoPlayOnImport = true;
+        bool loadNewestVideoOnStartup = true;
         bool checkForUpdatesOnStartup = true;
         int defaultVolumePercent = 80;
         int recentMediaLimit = 8;
@@ -54,7 +58,7 @@ public:
         QString windowTitle = "Potato Studio";
         QString logoPrimaryText = "POTATO";
         QString logoSecondaryText = "STUDIO";
-        QString importButtonText = "IMPORT";
+        QString importButtonText = "Import Media";
         int sidebarWidth = 260;
         QString sidebarPosition = "left";
         QString toolButtonOrder = "text,blur,pixel,blackout,shape,colorcorrect,autocut,settings,resetcrop,speedramp";
@@ -62,36 +66,36 @@ public:
         float defaultCropBottom = 0.96f;
         float defaultCropLeft = 0.0f;
         float defaultCropRight = 1.0f;
-        QString previewPlaceholderTitle = "Import media to start editing";
-        QString previewPlaceholderBody = "Video appears here. Audio-only files can still be trimmed, auto-cut, and exported.";
+        QString previewPlaceholderTitle = "Start with a media file";
+        QString previewPlaceholderBody = "Drop video or audio here, or choose Import Media.";
         QString emptyTransportHint = "SPACE PLAY/PAUSE | S SPLIT | CTRL+C EXPORT";
         QString videoTransportHint = "SPACE PLAY/PAUSE | S SPLIT | CTRL+C EXPORT VIDEO";
         QString audioTransportHint = "SPACE PLAY/PAUSE | S SPLIT | CTRL+SHIFT+C EXPORT AUDIO";
-        QString timelineAccentColor = "#FF7A50";
-        QString timelineSecondaryColor = "#FF5C33";
-        QString timelineBackgroundColor = "#121217";
-        QString timelineTrackColor = "#26262E";
-        QString timelineWaveformColor = "#7A8B99";
-        QString previewAccentColor = "#FF7A50";
-        QString previewSecondaryColor = "#FF5C33";
-        QString previewBackgroundColor = "#08080A";
-        QString appBackgroundStartColor = "#0F0F13";
-        QString appBackgroundEndColor = "#0D0D11";
-        QString panelSurfaceColor = "#17171C";
-        QString panelAltSurfaceColor = "#1D1D24";
-        QString controlSurfaceColor = "#25252D";
-        QString controlHoverColor = "#2E2E38";
-        QString borderColor = "#3C3C4A";
-        QString primaryTextColor = "#EFEFF4";
-        QString mutedTextColor = "#9C9CA8";
-        QString sectionLabelColor = "#8B8B97";
-        QString logoPrimaryColor = "#FFFFFF";
-        QString logoSecondaryColor = "#FF7A50";
+        QString timelineAccentColor = "#4A86A3";
+        QString timelineSecondaryColor = "#315F75";
+        QString timelineBackgroundColor = "#101214";
+        QString timelineTrackColor = "#252A2D";
+        QString timelineWaveformColor = "#9CB8C4";
+        QString previewAccentColor = "#D46252";
+        QString previewSecondaryColor = "#A9473B";
+        QString previewBackgroundColor = "#030303";
+        QString appBackgroundStartColor = "#0B0B0C";
+        QString appBackgroundEndColor = "#101011";
+        QString panelSurfaceColor = "#1B1B1D";
+        QString panelAltSurfaceColor = "#131315";
+        QString controlSurfaceColor = "#29292C";
+        QString controlHoverColor = "#39393D";
+        QString borderColor = "#55555C";
+        QString primaryTextColor = "#E0E0E2";
+        QString mutedTextColor = "#A1A1A7";
+        QString sectionLabelColor = "#C4C4C8";
+        QString logoPrimaryColor = "#E2E2E2";
+        QString logoSecondaryColor = "#A6A6A6";
         QString appFontFamily = "Sans Serif";
-        int appFontPointSize = 12;
-        int logoFontPointSize = 18;
+        int appFontPointSize = 10;
+        int logoFontPointSize = 13;
         int mediaBadgeFontPointSize = 9;
-        int metaFontPointSize = 11;
+        int metaFontPointSize = 9;
         int panelCornerRadius = 10;
         int buttonCornerRadius = 6;
         QString keyPlayPause = "Space";
@@ -113,6 +117,7 @@ public:
     };
 
     MainWindow(QWidget *parent = nullptr);
+    ~MainWindow() override;
     EditorSettings getEditorSettings() const { return editorSettings; }
     const QString CURRENT_VERSION = "1.3.0";
     void downloadUpdate(const QString &url);
@@ -145,6 +150,18 @@ private:
     void applyIcons();
     void saveSnapshot();
     void showShortcutsDialog();
+    void showCommandPalette();
+    void resetPanelLayout();
+    void updateEditActions();
+    QLineEdit *mediaSearch;
+    QPushButton *commandBtn;
+    QPushButton *viewBtn;
+    QPushButton *emptyImportBtn;
+    QWidget *emptyPreviewPanel;
+    QMenu *viewMenu;
+    bool exportBusy = false;
+    bool recentFilesScanned = false;
+
     QString buildAppStyleSheet() const;
     // Overlay clip <-> preview sync (regions shown/edited on the video)
     void syncOverlaysToPreview();
@@ -173,6 +190,7 @@ private:
     QVBoxLayout* stageColumnLayout;
     QFrame* previewHeader;
     QFrame* videoContainer;
+    QVideoWidget* nativeVideoWidget;
     QWidget* videoFullscreenPlaceholder;
     QDialog* videoFullscreenDialog;
     VideoWithCropWidget* videoWithCrop;
@@ -242,6 +260,8 @@ private:
     QString currentMediaPath;
     QStringList cachedRecentFiles;
     EditorSettings editorSettings;
+    float lastAppliedVolume = -1.0f;
+    QElapsedTimer playbackUiClock;
     QShortcut* playPauseShortcut;
     // Export progress (inline, in the timeline header)
     QProgressBar* exportProgressBar;

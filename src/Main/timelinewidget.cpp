@@ -39,6 +39,7 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent) {
     zoomFactor = 1.0;
     scrollOffset = 0;
     durationMs = 0;
+    repaintClock.start();
 
     this->setAttribute(Qt::WA_StyledBackground, true);
     this->ensurePolished();
@@ -46,6 +47,20 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent) {
     this->style()->polish(this);
 
     connect(videoSink, &QVideoSink::videoFrameChanged, this, &TimelineWidget::processVideoFrame);
+}
+
+TimelineWidget::~TimelineWidget() {
+    // QWidget deletes children before QObject disconnects incoming signals.
+    // QProcess teardown can emit finished synchronously; stop those callbacks
+    // while the timeline's caches and undo state are still alive.
+    for (QProcess *job : findChildren<QProcess*>(QString(), Qt::FindDirectChildrenOnly)) {
+        job->disconnect();
+        job->kill();
+        if (job->state() != QProcess::NotRunning) job->waitForFinished(1000);
+        delete job;
+    }
+    videoSink->disconnect(this);
+    thumbPlayer->disconnect(this);
 }
 
 void TimelineWidget::setCurrentPosition(qint64 ms) {
@@ -57,13 +72,17 @@ void TimelineWidget::setCurrentPosition(qint64 ms) {
         selectedSegmentIndices.clear();
         emitVisualStateForCurrentContext();
     }
-    update();
+    if (!playbackActive || oldSegment != newSegment || repaintClock.elapsed() >= 33) {
+        update();
+        repaintClock.restart();
+    }
 }
 
 void TimelineWidget::splitAtPlayhead() {
     const int splitGuard = playbackSettings.splitGuardMs;
     for (int i = 0; i < segments.size(); ++i) {
         if (currentPosMs > segments[i].startMs + splitGuard && currentPosMs < segments[i].endMs - splitGuard) {
+            saveState("Split clip");
             Segment splitSegment = segments[i];
             qint64 originalEnd = splitSegment.endMs;
             segments[i].endMs = currentPosMs;
@@ -111,7 +130,8 @@ void TimelineWidget::addOverlayAt(int type, qint64 timeMs) {
     relayout();
     update();
     emit overlaysChanged();
-    if (type == 3) emit requestEditTextOverlay(selectedOverlayIdx);
+    if (type == 3) showNotification("TEXT ADDED — DOUBLE-CLICK IT TO EDIT");
+    else if (type == 0) showNotification("BLUR ADDED — DRAG THE REGION IN THE VIEWER");
     else if (type == 4 || type == 5) emit requestEditOverlayProperties(selectedOverlayIdx);
 }
 
@@ -261,15 +281,16 @@ int TimelineWidget::overlayIndexAt(const QPoint &pos, OverlayDragMode *edge) con
 
 // ============================ Multi-source ============================
 
-// Loads (or generates, via the same ffmpeg tile command the media bin uses)
-// a 10-frame filmstrip for an appended source so its timeline clip shows
-// thumbnails like the primary clip does.
+// Loads or generates a uniformly sampled filmstrip for any timeline source.
 void TimelineWidget::ensureSourceFilmstrip(int sourceIdx) {
-    if (sourceIdx <= 0 || sourceIdx >= sources.size()) return;
-    if (sourceFilmstrips.contains(sourceIdx)) return;
+    if (sourceIdx < 0 || sourceIdx >= sources.size() || !sources[sourceIdx].hasVideo) return;
+    if (sourceFilmstrips.contains(sourceIdx) || pendingFilmstrips.contains(sourceIdx) ||
+        sources[sourceIdx].durationMs <= 0) return;
 
     const QString path = sources[sourceIdx].path;
-    const QString cachePath = QDir::tempPath() + "/potato_cache_" + QFileInfo(path).baseName() + ".jpg";
+    constexpr int frameCount = 6;
+    const auto generation = mediaGeneration;
+    const QString cachePath = MediaUtils::previewCachePath(path) + ".timeline.jpg";
 
     QImage strip;
     if (QFile::exists(cachePath) && strip.load(cachePath)) {
@@ -278,17 +299,42 @@ void TimelineWidget::ensureSourceFilmstrip(int sourceIdx) {
         return;
     }
 
+    pendingFilmstrips.insert(sourceIdx);
     auto *ffmpeg = new QProcess(this);
+    MediaUtils::prioritizeInteractivePlayback(ffmpeg);
+    ffmpeg->setProperty("mediaJob", true);
     QStringList args;
-    args << "-y" << "-ss" << "0" << "-t" << "10" << "-i" << path
-         << "-vf" << "fps=1,scale=160:-1,tile=10x1"
-         << "-frames:v" << "1" << "-preset" << "ultrafast" << cachePath;
-    connect(ffmpeg, &QProcess::finished, this, [this, ffmpeg, sourceIdx, cachePath]() {
+    const double durationSec = qMax(0.1, sources[sourceIdx].durationMs / 1000.0);
+    args << "-y";
+    for (int i = 0; i < frameCount; ++i) {
+        const double timestamp = durationSec * (i + 0.5) / frameCount;
+        // Filmstrip samples need representative frames, not frame-accurate
+        // decoding of every 4K frame between the keyframe and the seek target.
+        args << "-threads" << "1" << "-skip_frame" << "nokey" << "-noaccurate_seek"
+             << "-ss" << QString::number(timestamp, 'f', 3) << "-i" << path;
+    }
+    QStringList scaledInputs;
+    QString filter;
+    for (int i = 0; i < frameCount; ++i) {
+        filter += QString("[%1:v]scale=160:90:force_original_aspect_ratio=increase,crop=160:90[v%1];").arg(i);
+        scaledInputs << QString("[v%1]").arg(i);
+    }
+    filter += scaledInputs.join(QString()) + QString("hstack=inputs=%1[out]").arg(frameCount);
+    args << "-threads" << "1" << "-filter_complex_threads" << "1" << "-filter_complex" << filter << "-map" << "[out]"
+         << "-frames:v" << "1" << cachePath;
+    connect(ffmpeg, &QProcess::finished, this, [this, ffmpeg, sourceIdx, cachePath, generation]() {
+        if (generation != mediaGeneration) { ffmpeg->deleteLater(); return; }
+        pendingFilmstrips.remove(sourceIdx);
         QImage loaded;
-        if (loaded.load(cachePath)) {
+        if (sourceIdx < sources.size() && loaded.load(cachePath)) {
             sourceFilmstrips[sourceIdx] = loaded;
             update();
         }
+        ffmpeg->deleteLater();
+    });
+    connect(ffmpeg, &QProcess::errorOccurred, this, [this, ffmpeg, sourceIdx, generation](QProcess::ProcessError error) {
+        if (error != QProcess::FailedToStart) return;
+        if (generation == mediaGeneration) pendingFilmstrips.remove(sourceIdx);
         ffmpeg->deleteLater();
     });
 #ifdef Q_OS_WIN
@@ -318,14 +364,19 @@ void TimelineWidget::appendMediaSource(const QString &path) {
     }
 
     showNotification("ADDING CLIP TO TIMELINE…");
+    if (isExporting) return;
+    const auto generation = mediaGeneration;
     auto *probe = new QProcess(this);
+    probe->setProperty("mediaJob", true);
     QStringList args;
     args << "-v" << "error"
          << "-show_entries" << "format=duration"
          << "-show_entries" << "stream=codec_type"
          << "-of" << "default=noprint_wrappers=1" << path;
 
-    connect(probe, &QProcess::finished, this, [this, probe, path](int exitCode) {
+    connect(probe, &QProcess::finished, this, [this, probe, path, generation](int exitCode) {
+        if (generation != mediaGeneration || isExporting) { probe->deleteLater(); return; }
+        for (const auto &source : sources) if (source.path == path) { probe->deleteLater(); return; }
         probe->deleteLater();
         const QString out = probe->readAllStandardOutput();
         double durationSec = 0.0;
@@ -335,8 +386,8 @@ void TimelineWidget::appendMediaSource(const QString &path) {
             else if (line.trimmed() == "codec_type=video") srcHasVideo = true;
             else if (line.trimmed() == "codec_type=audio") srcHasAudio = true;
         }
-        if (exitCode != 0 || durationSec <= 0.05 || !srcHasVideo) {
-            showNotification("COULDN'T ADD THAT FILE (NEEDS A VIDEO STREAM)");
+        if (exitCode != 0 || durationSec <= 0.05 || (!srcHasVideo && !srcHasAudio)) {
+            showNotification("Could not add this media file");
             return;
         }
 
@@ -389,6 +440,7 @@ void TimelineWidget::deleteSelectedSegment() {
 }
 
 void TimelineWidget::deleteActiveSelection() {
+    if (selectedOverlayIdx >= 0) { deleteSelectedOverlay(); return; }
     QSet<int> toDelete = selectedSegmentIndices;
     if (selectedSegmentIdx != -1) toDelete.insert(selectedSegmentIdx);
     if (toDelete.isEmpty()) return;
@@ -461,13 +513,22 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
     const int aTop = vTop + trackHeight + 15;
 
     // Safety check: if no duration, don't draw clips
-    if (durationMs <= 0 || segments.isEmpty()) return;
+    if (durationMs <= 0 || segments.isEmpty()) {
+        painter.setPen(QColor("#A1A1A7"));
+        painter.drawText(rect().adjusted(24, 0, -24, 0), Qt::AlignCenter,
+                         "Drop media here to build your timeline");
+        return;
+    }
 
     painter.save();
     painter.setClipRect(sidebarWidth, 0, width() - sidebarWidth, height());
     painter.translate(sidebarWidth - scrollOffset, 0);
 
     double pxPerMs = static_cast<double>(contentWidth) / durationMs;
+    const int visibleLeft = scrollOffset;
+    const int visibleRight = scrollOffset + viewWidth;
+    const qint64 visibleStartMs = visibleLeft / pxPerMs;
+    const qint64 visibleEndMs = qMin(durationMs, qint64(visibleRight / pxPerMs) + 1);
 
     // --- Lane bands: separate video/audio lanes like an NLE timeline ---
     painter.fillRect(QRectF(0, vTop - 6, contentWidth, trackHeight + 12), m_trackColor.lighter(112));
@@ -477,6 +538,7 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
 
     // --- Overlay lanes (effects / text) above the video track ---
     if (!overlays.isEmpty()) {
+        painter.save();
         const QVector<int> lanes = computeOverlayLanes();
         const int laneCount = overlayLaneCount();
         for (int l = 0; l < laneCount; ++l) {
@@ -501,14 +563,17 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
                 case 0:  base = QColor("#5B8DEF"); label = "BLUR"; break;
                 case 1:  base = QColor("#9B6BE8"); label = "PIXEL"; break;
                 case 2:  base = QColor("#666B75"); label = "BLACK"; break;
-                default: base = QColor("#3FB68B");
+                case 3:  base = QColor("#C58A45");
                          label = ov.text.isEmpty() ? "TEXT" : ov.text.left(24).toUpper(); break;
+                case 4:  base = QColor("#3FA37C"); label = "SHAPE"; break;
+                case 5:  base = QColor("#A66AB0"); label = "COLOR"; break;
+                default: base = QColor("#66717A"); label = "EFFECT"; break;
             }
             const bool sel = (i == selectedOverlayIdx);
             QColor fill = base; fill.setAlpha(sel ? 200 : 120);
             painter.setPen(sel ? QPen(Qt::white, 1.4) : QPen(base.lighter(115), 1));
             painter.setBrush(fill);
-            painter.drawRoundedRect(r, 6, 6);
+            painter.drawRoundedRect(r, 2, 2);
 
             // Trim handles on the selected overlay
             if (sel) {
@@ -522,6 +587,7 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
             painter.drawText(r.adjusted(8, 0, -8, 0), Qt::AlignVCenter | Qt::AlignLeft,
                              painter.fontMetrics().elidedText(label, Qt::ElideRight, static_cast<int>(r.width()) - 14));
         }
+        painter.restore();
     }
 
     // --- Ruler: tick marks + timecodes along the top, like an NLE ruler ---
@@ -537,7 +603,7 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
         tickFont.setPointSizeF(7.5);
         painter.setFont(tickFont);
 
-        for (qint64 t = 0; t <= durationMs; t += interval) {
+        for (qint64 t = (visibleStartMs / interval) * interval; t <= visibleEndMs; t += interval) {
             const int x = static_cast<int>(t * pxPerMs);
             painter.setPen(QPen(QColor(255, 255, 255, 55), 1));
             painter.drawLine(x, rulerHeight - 8, x, rulerHeight);
@@ -562,6 +628,7 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
 
     for (int i = 0; i < segments.size(); ++i) {
         QRectF clipRect(segments[i].startMs * pxPerMs, vTop, (segments[i].endMs - segments[i].startMs) * pxPerMs, trackHeight);
+        if (clipRect.right() < visibleLeft || clipRect.left() > visibleRight) continue;
         bool isSel = (i == selectedSegmentIdx) || selectedSegmentIndices.contains(i);
 
         if (isSel) {
@@ -579,33 +646,41 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
             painter.setClipRect(clipRect.adjusted(2, 2, -2, -2));
             painter.setOpacity(isSel ? 0.62 : 0.42);
             const int thumbW = 88;
-            for (int x = static_cast<int>(clipRect.left()) + 4; x < clipRect.right(); x += thumbW) {
+            for (int x = static_cast<int>(clipRect.left()) + 4 + qMax(0, (visibleLeft - static_cast<int>(clipRect.left()) - 4) / thumbW) * thumbW; x < qMin(clipRect.right(), double(visibleRight)); x += thumbW) {
                 const qint64 timeAtX = qBound<qint64>(segments[i].startMs,
                     static_cast<qint64>(x / pxPerMs), segments[i].endMs);
                 const int sec = static_cast<int>(timeAtX / 1000);
-                if (!thumbnailCache.contains(sec)) continue;
+                auto thumbIt = thumbnailCache.lowerBound(sec);
+                if (thumbIt == thumbnailCache.end()) --thumbIt;
+                else if (thumbIt != thumbnailCache.begin()) {
+                    auto previous = thumbIt;
+                    --previous;
+                    if (qAbs(previous.key() - sec) <= qAbs(thumbIt.key() - sec)) thumbIt = previous;
+                }
                 QRect target(x, static_cast<int>(clipRect.top()) + 3, thumbW - 4, trackHeight - 6);
-                painter.drawImage(target, thumbnailCache.value(sec));
+                painter.drawImage(target, thumbIt.value());
             }
             painter.restore();
         }
 
         // Appended clips: filmstrip slices (10 frames over the source's first
         // 10 s) + the source filename as a label.
-        if (segments[i].sourceIdx > 0 && segments[i].sourceIdx < sources.size()) {
+        if (segments[i].sourceIdx >= 0 && segments[i].sourceIdx < sources.size()) {
             const int srcIdx = segments[i].sourceIdx;
             if (sourceFilmstrips.contains(srcIdx)) {
                 const QImage &strip = sourceFilmstrips[srcIdx];
-                const int frameW = qMax(1, strip.width() / 10);
+                const int cachedFrames = qMax(1, strip.width() / 160);
+                const int frameW = qMax(1, strip.width() / cachedFrames);
                 painter.save();
                 painter.setClipRect(clipRect.adjusted(2, 2, -2, -2));
                 painter.setOpacity(isSel ? 0.62 : 0.42);
                 const int thumbW = 88;
-                for (int x = static_cast<int>(clipRect.left()) + 4; x < clipRect.right(); x += thumbW) {
+                for (int x = static_cast<int>(clipRect.left()) + 4 + qMax(0, (visibleLeft - static_cast<int>(clipRect.left()) - 4) / thumbW) * thumbW; x < qMin(clipRect.right(), double(visibleRight)); x += thumbW) {
                     const qint64 timeAtX = qBound<qint64>(segments[i].startMs,
                         static_cast<qint64>(x / pxPerMs), segments[i].endMs);
-                    const int localSec = static_cast<int>((timeAtX - sources[srcIdx].offsetMs) / 1000);
-                    const int frameIdx = qBound(0, localSec, 9);
+                    const qint64 localMs = qMax<qint64>(0, timeAtX - sources[srcIdx].offsetMs);
+                    const int frameIdx = qBound(0, static_cast<int>(cachedFrames * localMs /
+                                                   qMax<qint64>(1, sources[srcIdx].durationMs)), cachedFrames - 1);
                     QRect target(x, static_cast<int>(clipRect.top()) + 3, thumbW - 4, trackHeight - 6);
                     painter.drawImage(target, strip, QRect(frameIdx * frameW, 0, frameW, strip.height()));
                 }
@@ -654,26 +729,18 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
             QColor currentWaveColor = isSel ? accent : accent.darker(180);
             painter.setPen(QPen(currentWaveColor, 1));
 
-            int startIdx = (segments[i].startMs * audioSamples.size()) / durationMs;
-            int endIdx = (segments[i].endMs * audioSamples.size()) / durationMs;
-
-            // PERFORMANCE OPTIMIZATION: Only draw one line per pixel to save CPU/GPU cycles
-            // especially important on 4K displays where the timeline can be very wide.
-            double samplesPerPixel = (double)audioSamples.size() / contentWidth;
-            int step = qMax(1, (int)samplesPerPixel);
-
-            for (int s = startIdx; s < endIdx && s < (int)audioSamples.size(); s += step) {
-                int x = (s * (double)contentWidth) / audioSamples.size();
-                
-                // Find max in this pixel range for a better visual representation
-                float maxInStep = 0.0f;
-                for (int j = 0; j < step && (s + j) < endIdx && (s + j) < (int)audioSamples.size(); ++j) {
-                    maxInStep = qMax(maxInStep, audioSamples[s + j]);
-                }
-
-                float norm = (maxInStep / maxAmplitude) * segments[i].gain;
-                int h = qMin((float)trackHeight, norm * (trackHeight - 10));
-                painter.drawLine(x, aTop + (trackHeight/2) - h/2, x, aTop + (trackHeight/2) + h/2);
+            const int left = qMax(visibleLeft, qRound(clipRect.left()));
+            const int right = qMin(visibleRight, qRound(clipRect.right()));
+            // Sample density is fixed at 100 Hz, independent of which async
+            // source has finished. Silent gaps retain their timeline position.
+            for (int x = left; x < right; ++x) {
+                const int start = qMax(0, int(x / pxPerMs / 10));
+                const int end = qMin(int(audioSamples.size()), qMax(start + 1, int((x + 1) / pxPerMs / 10)));
+                float peak = 0;
+                for (int sample = start; sample < end; ++sample) peak = qMax(peak, audioSamples[sample]);
+                const float norm = segments[i].muted ? 0 : peak / maxAmplitude * segments[i].gain;
+                const int h = qMin(float(trackHeight), norm * (trackHeight - 10));
+                painter.drawLine(x, aTop + trackHeight / 2 - h / 2, x, aTop + trackHeight / 2 + h / 2);
             }
         }
     }

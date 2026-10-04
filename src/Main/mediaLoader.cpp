@@ -1,9 +1,22 @@
 #include <qfile.h>
 #include <QVideoFrame>
 #include <QTimer>
+#include <QProcess>
 #include "../Includes/timelinewidget.h"
 
 void TimelineWidget::resetMediaState() {
+    ++mediaGeneration;
+    ++waveformGeneration;
+    ++editRevision;
+    autoCutBusy = false;
+    for (QProcess *job : findChildren<QProcess*>(QString(), Qt::FindDirectChildrenOnly)) {
+        if (!job->property("mediaJob").toBool()) continue;
+        job->disconnect(this);
+        job->kill();
+        job->deleteLater();
+    }
+    markers.clear();
+
     thumbnailCache.clear();
     audioSamples.clear();
     undoStack.clear();
@@ -23,6 +36,7 @@ void TimelineWidget::resetMediaState() {
     // clips belong to the previous timeline, not the new file.
     sources.clear();
     sourceFilmstrips.clear();
+    pendingFilmstrips.clear();
     overlays.clear();
     selectedOverlayIdx = -1;
     overlayDrag = OvNone;
@@ -43,6 +57,7 @@ void TimelineWidget::resetMediaState() {
     thumbnailRequestActive = false;
     thumbnailRequestQueue.clear();
     emit overlaysChanged();
+    emit historyChanged();
 }
 
 void TimelineWidget::setMediaSource(const QUrl &url) {
@@ -58,7 +73,6 @@ void TimelineWidget::setMediaSource(const QUrl &url) {
     originalFileSize = file.size();
     if (!sources.isEmpty()) sources[0].fileSizeBytes = originalFileSize;
 
-    thumbPlayer->setSource(url);
     // detectAudioTracks is now async and will trigger loadAudioFast when done
     detectAudioTracks(url.toLocalFile());
 
@@ -71,7 +85,9 @@ void TimelineWidget::requestTimelineThumbnails() {
 
     thumbnailRequestQueue.clear();
     const int durationSec = qMax(1, static_cast<int>(durationMs / 1000));
-    const int stepSec = qMax(1, durationSec / 18);
+    // Sixteen cached frames are enough for a dense filmstrip because painting
+    // chooses the nearest frame. More random seeks only compete with playback.
+    const int stepSec = qMax(1, durationSec / 16);
     for (int sec = 0; sec <= durationSec; sec += stepSec) {
         if (!thumbnailCache.contains(sec)) thumbnailRequestQueue.enqueue(sec);
     }
@@ -80,7 +96,13 @@ void TimelineWidget::requestTimelineThumbnails() {
 }
 
 void TimelineWidget::requestNextTimelineThumbnail() {
-    if (thumbnailRequestActive || thumbnailRequestQueue.isEmpty()) return;
+    if (thumbnailRequestActive) return;
+    if (thumbnailRequestQueue.isEmpty()) {
+        // Release the secondary decoder as soon as the cache is complete.
+        thumbPlayer->stop();
+        thumbPlayer->setSource(QUrl());
+        return;
+    }
     thumbnailRequestActive = true;
     const int sec = thumbnailRequestQueue.dequeue();
     thumbPlayer->setPosition(sec * 1000);
@@ -115,7 +137,7 @@ void TimelineWidget::setDuration(qint64 duration) {
     // Force a layout recalculation and a repaint
     this->relayout();
     this->update();
-    QTimer::singleShot(100, this, &TimelineWidget::requestTimelineThumbnails);
+    QTimer::singleShot(100, this, [this]() { ensureSourceFilmstrip(0); });
 }
 
 void TimelineWidget::processVideoFrame(const QVideoFrame &f) {

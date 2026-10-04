@@ -7,6 +7,8 @@
 #include <QTimer>
 #include <QCoreApplication>
 #include <QMap>
+#include <QApplication>
+#include <QSharedPointer>
 #include <functional>
 #include "../Includes/mediautils.h"
 
@@ -67,57 +69,49 @@ void PreviewLabel::setSource(const QString &videoPath) {
 }
 
 void PreviewLabel::generatePreview() {
-    if (isAudioFile) {
-        renderAudioPlaceholder();
+    if (isAudioFile) { renderAudioPlaceholder(); return; }
+    const QString sourcePath = path;
+    const QString outPath = MediaUtils::previewCachePath(path);
+    if (filmstrip.load(outPath)) { updatePreview(0); return; }
+    renderLoadingPlaceholder();
+    // Other rows requesting the same media share the on-disk result.
+    if (g_generationCache.value(sourcePath, false)) {
+        QTimer::singleShot(150, this, [this, sourcePath]() {
+            if (path == sourcePath) generatePreview();
+        });
         return;
     }
-
-    QString outPath = QDir::tempPath() + "/potato_cache_" + QFileInfo(path).baseName() + ".jpg";
-
-    if (QFile::exists(outPath)) {
-        if (filmstrip.load(outPath)) {
-            updatePreview(0);
+    g_generationCache[sourcePath] = true;
+    enqueuePreviewJob([self = QPointer<PreviewLabel>(this), sourcePath, outPath]() {
+        if (!self || self->path != sourcePath) {
+            g_generationCache[sourcePath] = false;
+            finishPreviewJob();
             return;
         }
-    }
-
-    // If already generating, don't enqueue again
-    if (g_generationCache.value(path, false)) {
-        renderLoadingPlaceholder();
-        return;
-    }
-
-    renderLoadingPlaceholder();
-    g_generationCache[path] = true;
-
-    QTimer::singleShot(100, this, [self = QPointer<PreviewLabel>(this), outPath]() {
-        enqueuePreviewJob([self, outPath]() {
-            if (!self) {
-                finishPreviewJob();
-                return;
+        // Jobs belong to the application, not a recycled row. Every exit path
+        // releases the queue even if the row disappears while ffmpeg is running.
+        auto *process = new QProcess(qApp);
+        MediaUtils::prioritizeInteractivePlayback(process);
+        auto completed = QSharedPointer<bool>::create(false);
+        auto finish = [self, sourcePath, outPath, process, completed](bool success) {
+            if (*completed) return;
+            *completed = true;
+            g_generationCache[sourcePath] = false;
+            if (self && self->path == sourcePath) {
+                if (success && self->filmstrip.load(outPath)) self->updatePreview(0);
+                else self->renderErrorPlaceholder();
             }
-
-            QStringList args;
-            args << "-y" << "-ss" << "0" << "-t" << "10" << "-i" << self->path
-                 << "-vf" << "fps=1,scale=160:-1,tile=10x1"
-                 << "-frames:v" << "1" << "-preset" << "ultrafast" << outPath;
-
-            QProcess *ffmpeg = new QProcess(self);
-            QObject::connect(ffmpeg, &QProcess::finished, self, [self, outPath, ffmpeg]() {
-                if (self) {
-                    if (self->filmstrip.load(outPath)) {
-                        self->updatePreview(0);
-                    } else {
-                        self->renderErrorPlaceholder();
-                    }
-                    g_generationCache[self->path] = false;
-                }
-                ffmpeg->deleteLater();
-                finishPreviewJob();
-            });
-
-            ffmpeg->start(getFFmpegPath(), args);
+            process->deleteLater();
+            finishPreviewJob();
+        };
+        QObject::connect(process, &QProcess::finished, qApp, [finish](int code) { finish(code == 0); });
+        QObject::connect(process, &QProcess::errorOccurred, qApp, [finish](QProcess::ProcessError error) {
+            if (error == QProcess::FailedToStart) finish(false);
         });
+        QTimer::singleShot(20000, process, [process, finish]() { process->kill(); finish(false); });
+        process->start(getFFmpegPath(), {"-v", "error", "-y", "-threads", "1", "-skip_frame", "nokey",
+                       "-ss", "0", "-t", "10", "-i", sourcePath, "-an", "-filter_threads", "1",
+                       "-vf", "fps=1,scale=160:-1,tile=10x1", "-frames:v", "1", outPath});
     });
 }
 
@@ -159,10 +153,7 @@ void PreviewLabel::renderAudioPlaceholder() {
     painter.setRenderHint(QPainter::Antialiasing);
     painter.fillRect(pixmap.rect(), QColor("#0f1b20"));
 
-    QLinearGradient gradient(0, 0, pixmap.width(), pixmap.height());
-    gradient.setColorAt(0.0, QColor("#173038"));
-    gradient.setColorAt(1.0, QColor("#081115"));
-    painter.fillRect(pixmap.rect().adjusted(2, 2, -2, -2), gradient);
+    painter.fillRect(pixmap.rect().adjusted(2, 2, -2, -2), QColor("#252A2D"));
 
     QFont iconFont = font();
     iconFont.setBold(true);

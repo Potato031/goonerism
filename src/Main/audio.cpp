@@ -4,8 +4,12 @@
 #include <QRegularExpression>
 #include <QCoreApplication>
 #include <QSharedPointer>
+#include <QTemporaryFile>
+#include <QFutureWatcher>
+#include <QtConcurrent>
 
 #include "../Includes/timelinewidget.h"
+#include "../Includes/mediautils.h"
 
 // Helper function to resolve the bundled binary path
 static QString getFFToolPath(const QString &tool) {
@@ -17,101 +21,91 @@ static QString getFFToolPath(const QString &tool) {
 }
 
 void TimelineWidget::loadAudioFast(const QString &inputPath) {
-    if (!hasAudioStream) {
-        audioSamples.clear();
-        maxAmplitude = 0.01f;
-        update();
-        emit mediaProbingFinished();
-        return;
-    }
-
-    QString tempAudioPath = QDir::tempPath() + QString("/potato_wave_%1.raw").arg(qAbs(qHash(inputPath)));
-    auto *ffmpeg = new QProcess(this);
-    QStringList args;
-    args << "-y" << "-i" << inputPath
-         << "-map" << QString("0:a:%1").arg(currentAudioTrack)
-         << "-f" << "s16le" << "-ac" << "1" << "-ar" << "8000" << tempAudioPath;
-
-    connect(ffmpeg, &QProcess::finished, this, [this, tempAudioPath, ffmpeg]() {
-        QFile file(tempAudioPath);
-        if (file.open(QIODevice::ReadOnly)) {
-            QByteArray data = file.readAll();
-            file.close();
-            QFile::remove(tempAudioPath);
-            const auto *samples = reinterpret_cast<const int16_t*>(data.constData());
-            int count = data.size() / sizeof(int16_t);
-            audioSamples.clear();
-            float localMax = 0.01f;
-            for (int i = 0; i < count; i += 80) {
-                double sum = 0;
-                int actualWindow = qMin(80, count - i);
-                for (int j = 0; j < actualWindow; ++j) {
-                    double val = samples[i + j] / 32768.0;
-                    sum += val * val;
-                }
-                float rms = std::sqrt(sum / actualWindow);
-                rms = std::pow(rms, 0.6f);
-                audioSamples.push_back(rms);
-                if (rms > localMax) localMax = rms;
-            }
-            maxAmplitude = localMax;
-        }
-        update();
-        emit mediaProbingFinished();
-        ffmpeg->deleteLater();
-    });
-
-    ffmpeg->start(getFFToolPath("ffmpeg"), args);
+    const auto trackGeneration = ++waveformGeneration;
+    if (!hasAudioStream) return;
+    loadAudioWaveform(inputPath, 0, currentAudioTrack, trackGeneration);
 }
 
-// Waveform for a source appended to the end of the timeline. Samples are
-// produced at the same fixed density as loadAudioFast (8000 Hz / 80-sample
-// windows = 100 samples per second), so appending keeps the index→time
-// mapping of the combined array valid.
 void TimelineWidget::appendAudioWaveform(const QString &inputPath) {
-    QString tempAudioPath = QDir::tempPath() + QString("/potato_wave_%1.raw").arg(qAbs(qHash(inputPath)));
-    auto *ffmpeg = new QProcess(this);
-    QStringList args;
-    args << "-y" << "-i" << inputPath
-         << "-map" << "0:a:0"
-         << "-f" << "s16le" << "-ac" << "1" << "-ar" << "8000" << tempAudioPath;
-
-    connect(ffmpeg, &QProcess::finished, this, [this, tempAudioPath, ffmpeg]() {
-        QFile file(tempAudioPath);
-        if (file.open(QIODevice::ReadOnly)) {
-            QByteArray data = file.readAll();
-            file.close();
-            QFile::remove(tempAudioPath);
-            const auto *samples = reinterpret_cast<const int16_t*>(data.constData());
-            int count = data.size() / sizeof(int16_t);
-            float localMax = maxAmplitude;
-            for (int i = 0; i < count; i += 80) {
-                double sum = 0;
-                int actualWindow = qMin(80, count - i);
-                for (int j = 0; j < actualWindow; ++j) {
-                    double val = samples[i + j] / 32768.0;
-                    sum += val * val;
-                }
-                float rms = std::sqrt(sum / actualWindow);
-                rms = std::pow(rms, 0.6f);
-                audioSamples.push_back(rms);
-                if (rms > localMax) localMax = rms;
-            }
-            maxAmplitude = localMax;
+    for (const auto &source : sources) {
+        if (source.path == inputPath) {
+            loadAudioWaveform(inputPath, source.offsetMs, 0, 0);
+            return;
         }
-        update();
-        ffmpeg->deleteLater();
-    });
+    }
+}
 
-    ffmpeg->start(getFFToolPath("ffmpeg"), args);
+void TimelineWidget::loadAudioWaveform(const QString &path, qint64 offsetMs, int track, quint64 trackGeneration) {
+    struct Waveform { QVector<float> samples; float peak = 0.01f; };
+    auto temporary = QSharedPointer<QTemporaryFile>::create(QDir::tempPath() + "/potato-wave-XXXXXX.raw");
+    if (!temporary->open()) return;
+    const QString pcmPath = temporary->fileName();
+    temporary->close();
+    const auto generation = mediaGeneration;
+    auto *process = new QProcess(this);
+    MediaUtils::prioritizeInteractivePlayback(process);
+    process->setProperty("mediaJob", true);
+    connect(process, &QProcess::readyReadStandardError, this, [process]() { process->readAllStandardError(); });
+    connect(process, &QProcess::finished, this,
+            [this, process, temporary, pcmPath, generation, trackGeneration, offsetMs](int code) {
+        process->deleteLater();
+        if (code != 0 || generation != mediaGeneration ||
+            (trackGeneration && trackGeneration != waveformGeneration)) return;
+        auto *watcher = new QFutureWatcher<Waveform>(this);
+        connect(watcher, &QFutureWatcher<Waveform>::finished, this,
+                [this, watcher, temporary, generation, trackGeneration, offsetMs]() {
+            const auto result = watcher->result();
+            watcher->deleteLater();
+            if (generation != mediaGeneration ||
+                (trackGeneration && trackGeneration != waveformGeneration)) return;
+            const int start = offsetMs / 10;
+            if (audioSamples.size() < start + result.samples.size()) audioSamples.resize(start + result.samples.size());
+            std::copy(result.samples.cbegin(), result.samples.cend(), audioSamples.begin() + start);
+            maxAmplitude = qMax(maxAmplitude, result.peak);
+            update();
+        });
+        // Decode and reduce PCM on a worker. Only the compact 100 Hz envelope
+        // crosses back to the UI; PCM reads and RMS calculations never stall input.
+        watcher->setFuture(QtConcurrent::run([temporary, pcmPath]() {
+            Waveform result;
+            QFile file(pcmPath);
+            if (!file.open(QIODevice::ReadOnly)) return result;
+            QByteArray pending;
+            while (!file.atEnd()) {
+                pending.append(file.read(65536));
+                const int windows = pending.size() / 160;
+                for (int window = 0; window < windows; ++window) {
+                    double sum = 0;
+                    for (int j = 0; j < 80; ++j) {
+                        const int index = window * 160 + j * 2;
+                        const quint16 bits = quint8(pending[index]) | (quint16(quint8(pending[index + 1])) << 8);
+                        const double value = static_cast<qint16>(bits) / 32768.0;
+                        sum += value * value;
+                    }
+                    const float rms = std::pow(std::sqrt(sum / 80), 0.6);
+                    result.samples.append(rms);
+                    result.peak = qMax(result.peak, rms);
+                }
+                pending.remove(0, windows * 160);
+            }
+            return result;
+        }));
+    });
+    connect(process, &QProcess::errorOccurred, this, [process](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) process->deleteLater();
+    });
+    process->start(getFFToolPath("ffmpeg"), {"-v", "error", "-y", "-threads", "1", "-i", path, "-vn",
+                   "-map", QString("0:a:%1").arg(track), "-filter_threads", "1", "-f", "s16le",
+                   "-ac", "1", "-ar", "8000", pcmPath});
 }
 
 void TimelineWidget::autoCutSilence() {
-    if (durationMs <= 0 || isExporting || segments.empty() || !hasAudioStream) {
+    if (durationMs <= 0 || isExporting || autoCutBusy || segments.empty() || !hasAudioStream) {
         showNotification("NO AUDIO TRACK TO ANALYZE");
         return;
     }
-    saveState("Auto-cut silence");
+    const auto generation = mediaGeneration;
+    const auto revision = editRevision;
     showNotification("ANALYZING TRIMMED SECTIONS");
 
     // Copy the segments so timeline edits during analysis can't crash us.
@@ -132,6 +126,7 @@ void TimelineWidget::autoCutSilence() {
         return;
     }
 
+    autoCutBusy = true;
     struct DetectState {
         QMap<int, QPair<QList<double>, QList<double>>> silence; // sourceIdx -> (starts, ends)
         int pending = 0;
@@ -139,7 +134,13 @@ void TimelineWidget::autoCutSilence() {
     auto state = QSharedPointer<DetectState>::create();
     state->pending = audioSources.size();
 
-    auto finalize = [this, workArea, settings, state]() {
+    auto finalize = [this, workArea, settings, state, generation, revision]() {
+        if (generation != mediaGeneration) return;
+        autoCutBusy = false;
+        if (revision != editRevision) {
+            showNotification("Timeline changed during analysis. Run auto-cut again.");
+            return;
+        }
         QList<Segment> newSegments;
         const double padding = settings.paddingSec;
         const double minimumClipDuration = settings.minimumClipDurationSec;
@@ -184,6 +185,7 @@ void TimelineWidget::autoCutSilence() {
         if (!anySilence) {
             showNotification("NO SILENCE FOUND IN TRIMMED AREA");
         } else if (!newSegments.isEmpty()) {
+            saveState("Auto-cut silence");
             segments = newSegments;
             showNotification(QString("CLEANED: %1 CLIPS").arg(segments.size()));
             emit clipTrimmed();
@@ -213,6 +215,7 @@ void TimelineWidget::autoCutSilence() {
              << "-f" << "null" << "-";
 
         QProcess* ffmpeg = new QProcess(this);
+        ffmpeg->setProperty("mediaJob", true);
         connect(ffmpeg, &QProcess::finished, this, [this, ffmpeg, si, state, finalize]() {
             const QString output = ffmpeg->readAllStandardError();
 
@@ -230,15 +233,27 @@ void TimelineWidget::autoCutSilence() {
             if (--state->pending == 0) finalize();
         });
 
+        connect(ffmpeg, &QProcess::errorOccurred, this, [this, ffmpeg, generation](QProcess::ProcessError error) {
+            if (error != QProcess::FailedToStart) return;
+            ffmpeg->deleteLater();
+            if (generation == mediaGeneration) {
+                autoCutBusy = false;
+                ++editRevision;
+                showNotification("Cannot analyze audio. Check that ffmpeg is installed.");
+            }
+        });
         ffmpeg->start(getFFToolPath("ffmpeg"), args);
     }
 }
 void TimelineWidget::detectAudioTracks(const QString &path) {
     auto *probe = new QProcess(this);
+    probe->setProperty("mediaJob", true);
+    const auto generation = mediaGeneration;
     QStringList args;
     args << "-v" << "error" << "-show_entries" << "stream=codec_type,index" << "-of" << "csv=p=0" << path;
 
-    connect(probe, &QProcess::finished, this, [this, probe, path](int exitCode) {
+    connect(probe, &QProcess::finished, this, [this, probe, path, generation](int exitCode) {
+        if (generation != mediaGeneration) { probe->deleteLater(); return; }
         if (exitCode != 0) {
             showNotification("TRACK DETECTION FAILED ❌");
             hasAudioStream = false;
@@ -277,6 +292,12 @@ void TimelineWidget::detectAudioTracks(const QString &path) {
             currentAudioTrack = 0;
         }
 
+        if (!sources.isEmpty()) {
+            sources[0].hasAudio = hasAudioStream;
+            sources[0].hasVideo = hasVideoStream;
+        }
+        ensureSourceFilmstrip(0);
+        emit mediaProbingFinished();
         if (hasAudioStream) {
             loadAudioFast(path);
         } else {
@@ -292,6 +313,14 @@ void TimelineWidget::detectAudioTracks(const QString &path) {
         probe->deleteLater();
     });
 
+    connect(probe, &QProcess::errorOccurred, this, [this, probe, generation](QProcess::ProcessError error) {
+        if (error != QProcess::FailedToStart) return;
+        probe->deleteLater();
+        if (generation == mediaGeneration) {
+            showNotification("Cannot inspect media. Install ffprobe and try again.");
+            emit mediaProbingFinished();
+        }
+    });
     probe->start(getFFToolPath("ffprobe"), args);
 }
 
