@@ -52,7 +52,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1-mesa-dev libpulse-dev libasound2-dev \
-          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxcb-cursor0 \
+          libxcb-cursor0 \
           ffmpeg patchelf desktop-file-utils
 
       - name: Install Qt
