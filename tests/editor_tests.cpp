@@ -163,7 +163,9 @@ private slots:
         QVERIFY(window.exportVideoAction->isEnabled());
         QVERIFY(!window.emptyImportBtn->isVisible());
         QCOMPARE(window.timeline->sources[0].hasAudio, true);
-        QCOMPARE(window.timeline->audioSamples.size(), 300);
+        // AAC padding differs between FFmpeg versions. Keep the 100 Hz
+        // waveform aligned to the three-second fixture within one AAC frame.
+        QVERIFY(qAbs(window.timeline->audioSamples.size() * 10 - 3000) <= 30);
         window.grab().save(sandbox.filePath("loaded.png"));
         // Entering text must never invoke a playback shortcut.
         window.exportInput->setFocus();
