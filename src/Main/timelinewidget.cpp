@@ -1,6 +1,7 @@
 #include "../Includes/timelinewidget.h"
 #include "../Includes/mediautils.h"
 #include <QPainter>
+#include <QPaintEvent>
 #include <QStyle>
 #include <QFile>
 #include <QVideoFrame>
@@ -73,7 +74,19 @@ void TimelineWidget::setCurrentPosition(qint64 ms) {
         emitVisualStateForCurrentContext();
     }
     if (!playbackActive || oldSegment != newSegment || repaintClock.elapsed() >= 33) {
-        update();
+        if (playbackActive && oldSegment == newSegment && durationMs > 0) {
+            const int contentWidth = (width() - sidebarWidth) * zoomFactor;
+            const double pxPerMs = double(contentWidth) / durationMs;
+            const auto playheadRect = [this, pxPerMs](qint64 pos) {
+                const int x = sidebarWidth - scrollOffset + int(pos * pxPerMs);
+                return QRect(x - 10, 0, 21, height());
+            };
+            // Erase the last painted playhead, including positions skipped by
+            // the refresh throttle, and leave the unchanged waveform alone.
+            update(QRegion(playheadRect(paintedPlayheadPosMs)) | playheadRect(currentPosMs));
+        } else {
+            update();
+        }
         repaintClock.restart();
     }
 }
@@ -493,7 +506,7 @@ void TimelineWidget::validatePlayheadPosition() {
     }
 }
 
-void TimelineWidget::paintEvent(QPaintEvent*) {
+void TimelineWidget::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
 
@@ -525,9 +538,9 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
     painter.translate(sidebarWidth - scrollOffset, 0);
 
     double pxPerMs = static_cast<double>(contentWidth) / durationMs;
-    const int visibleLeft = scrollOffset;
-    const int visibleRight = scrollOffset + viewWidth;
-    const qint64 visibleStartMs = visibleLeft / pxPerMs;
+    // Include adjacent geometry whose antialiased edges reach the dirty strip.
+    const int visibleLeft = scrollOffset + qMax(0, event->rect().left() - sidebarWidth - 2);
+    const int visibleRight = scrollOffset + qMin(viewWidth, event->rect().right() - sidebarWidth + 3);
     const qint64 visibleEndMs = qMin(durationMs, qint64(visibleRight / pxPerMs) + 1);
 
     // --- Lane bands: separate video/audio lanes like an NLE timeline ---
@@ -603,7 +616,9 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
         tickFont.setPointSizeF(7.5);
         painter.setFont(tickFont);
 
-        for (qint64 t = (visibleStartMs / interval) * interval; t <= visibleEndMs; t += interval) {
+        // A tick outside the dirty strip can still have text inside it.
+        const qint64 rulerStartMs = qMax(0, visibleLeft - 100) / pxPerMs;
+        for (qint64 t = (rulerStartMs / interval) * interval; t <= visibleEndMs; t += interval) {
             const int x = static_cast<int>(t * pxPerMs);
             painter.setPen(QPen(QColor(255, 255, 255, 55), 1));
             painter.drawLine(x, rulerHeight - 8, x, rulerHeight);
@@ -759,6 +774,7 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
     painter.setPen(QPen(pulseColor, 2));
     painter.drawLine(playheadX, 12, playheadX, height());
     painter.restore();
+    paintedPlayheadPosMs = currentPosMs;
 
 }
 

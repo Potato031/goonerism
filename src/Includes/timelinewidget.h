@@ -329,6 +329,7 @@ private:
     bool isExporting = false;
     bool isScrubbing = false;
     bool playbackActive = false;
+    qint64 paintedPlayheadPosMs = 0;
     QElapsedTimer repaintClock;
 
     QStringList trackNames = {

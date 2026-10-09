@@ -35,6 +35,16 @@ The test suite covers paused imports, rapid media switching, waveform alignment,
 
 Native playback hides the inactive editing layer, so a transparent QWidget does not repaint over the video on every frame. Effects can still be dropped onto the playing viewer. Thumbnail requests for the same source share one job, and thumbnail/audio preparation uses limited decoder threads and lower process priority on Unix to keep playback responsive.
 
+Playback repaints only the old and new playhead strips while the active segment stays unchanged. Waveform and thumbnail drawing visits the damaged area; edits and segment transitions still refresh the whole timeline. A regression compares incremental rendering against a full redraw, including antialiased edges and ruler labels.
+
+For 120 playhead moves across a two-hour, 100 Hz waveform at 1600×240, two alternating Release-build measurements gave median rendering times of 1,295 ms before this change and 138 ms afterward. Repainted pixels fell from 46,080,000 to 922,320 (98%). These measure timeline rendering, not overall decoding CPU; the separate 4K playback profile can still exceed its responsiveness budget on a busy desktop.
+
+```sh
+QT_QPA_PLATFORM=offscreen ./build/EditorTests playbackRepaintsOnlyMovingPlayhead -nocrashhandler
+```
+
+Tagged Linux releases verify that the tag matches `CURRENT_VERSION` in `src/Includes/mainWindow.h` and pass regression tests before packaging and publishing the AppImage.
+
 To measure UI timer delays against a local recording on the desktop:
 
 ```sh

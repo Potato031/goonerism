@@ -119,7 +119,7 @@ public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
     EditorSettings getEditorSettings() const { return editorSettings; }
-    const QString CURRENT_VERSION = "1.3.0";
+    const QString CURRENT_VERSION = "1.3.1";
     void downloadUpdate(const QString &url);
     void finalizeUpdate();
     void checkForUpdates();

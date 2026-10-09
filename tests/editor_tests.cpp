@@ -8,6 +8,7 @@
 #include <QVideoWidget>
 #include <QClipboard>
 #include <QMimeData>
+#include <QPaintEvent>
 #include "../src/Includes/mainWindow.h"
 #include "../src/Includes/appsettings.h"
 #include "../src/Includes/mediautils.h"
@@ -95,6 +96,58 @@ private slots:
         qInfo() << "Editing-layer paints for 60 native frames:" << counter.count;
         QVERIFY2(counter.count <= 1, "Native playback must not repaint the transparent editing layer on every frame.");
     }
+    void playbackRepaintsOnlyMovingPlayhead() {
+        struct PaintCounter : QObject {
+            qint64 pixels = 0;
+            QRegion region;
+            bool eventFilter(QObject *, QEvent *event) override {
+                if (event->type() == QEvent::Paint) {
+                    region |= static_cast<QPaintEvent *>(event)->region();
+                    for (const QRect &rect : static_cast<QPaintEvent *>(event)->region())
+                        pixels += qint64(rect.width()) * rect.height();
+                }
+                return false;
+            }
+        } counter;
+        TimelineWidget timeline;
+        timeline.resize(1600, 240);
+        timeline.durationMs = 7200000;
+        timeline.segments.append({0, timeline.durationMs});
+        timeline.selectedSegmentIdx = 0;
+        timeline.audioSamples.resize(720000);
+        for (size_t i = 0; i < timeline.audioSamples.size(); ++i)
+            timeline.audioSamples[i] = float(i % 100) / 100;
+        timeline.maxAmplitude = 1;
+        timeline.show();
+        QTest::qWait(30);
+        timeline.installEventFilter(&counter);
+        timeline.setPlaybackActive(true);
+        qint64 paintNs = 0;
+        for (int i = 1; i <= 120; ++i) {
+            QTest::qWait(34);
+            QElapsedTimer elapsed;
+            elapsed.start();
+            timeline.setCurrentPosition(i * 50000);
+            QCoreApplication::processEvents();
+            paintNs += elapsed.nsecsElapsed();
+        }
+        qInfo() << "120 long-timeline playback paints:" << paintNs / 1000000.0
+                << "ms; painted pixels:" << counter.pixels;
+        QVERIFY2(counter.pixels < qint64(120) * timeline.width() * timeline.height() / 4,
+                 "Playback must not redraw the entire waveform for each playhead move.");
+        // Incremental painting must produce exactly the same pixels as a full
+        // redraw, including the waveform behind the previous playhead.
+        QImage incremental = timeline.grab().toImage();
+        counter.region = QRegion();
+        QTest::qWait(34);
+        timeline.setCurrentPosition(6100000);
+        QCoreApplication::processEvents();
+        const QRegion dirty = counter.region;
+        QVERIFY(!dirty.isEmpty());
+        timeline.render(&incremental, dirty.boundingRect().topLeft(), dirty);
+        const QImage full = timeline.grab().toImage();
+        QCOMPARE(incremental, full);
+    }
     void profileInteractivePlayback() {
         const QString path = qEnvironmentVariable("POTATO_EDITOR_PROFILE_MEDIA");
         if (path.isEmpty()) QSKIP("Set POTATO_EDITOR_PROFILE_MEDIA to measure a real recording.");
@@ -117,7 +170,11 @@ private slots:
         heartbeat.setTimerType(Qt::PreciseTimer);
         connect(&heartbeat, &QTimer::timeout, [&]() { gaps.append(clock.restart()); });
         heartbeat.start(5);
-        QTest::qWait(4000);
+        // Run the real event loop: qWait polls it in intervals that distort a
+        // five-millisecond heartbeat and inflate measured input latency.
+        QEventLoop playbackLoop;
+        QTimer::singleShot(4000, &playbackLoop, &QEventLoop::quit);
+        playbackLoop.exec();
         heartbeat.stop();
         std::sort(gaps.begin(), gaps.end());
         QVERIFY(!gaps.isEmpty());
