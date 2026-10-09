@@ -308,7 +308,7 @@ private:
 
     double zoomFactor = 1.0;
     int scrollOffset = 0;
-    const int sidebarWidth = 0;
+    const int sidebarWidth = 78;
     const int rulerHeight = 30;
     const int trackHeight = 60;
 

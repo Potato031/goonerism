@@ -14,7 +14,7 @@ done
 chmod +x linuxdeploy*.AppImage
 
 export APPIMAGE_EXTRACT_AND_RUN=1
-export LDAI_OUTPUT=potatoeditor.AppImage
+export LDAI_OUTPUT=potatoeditor.appimage
 export LINUXDEPLOY_OUTPUT_VERSION=${APPIMAGE_VERSION:-development}
 export QMAKE=${QMAKE:-$(command -v qmake6 || command -v qmake)}
 
@@ -38,9 +38,9 @@ done
     --icon-file "$package_dir/potato.png" \
     "${codec_args[@]}" --plugin qt --output appimage
 
-test -s potatoeditor.AppImage
+test -s potatoeditor.appimage
 # Verify the helpers survived packaging without requiring FUSE on CI.
-./potatoeditor.AppImage --appimage-extract >/dev/null
+./potatoeditor.appimage --appimage-extract >/dev/null
 test -x squashfs-root/usr/bin/PotatoEditor
 test -x squashfs-root/usr/bin/ffmpeg
 test -x squashfs-root/usr/bin/ffprobe

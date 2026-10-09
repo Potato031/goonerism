@@ -50,6 +50,7 @@
 #include <QCheckBox>
 #include <QSpinBox>
 #include <QTabWidget>
+#include <QGridLayout>
 #include <QDialogButtonBox>
 #include <QComboBox>
 #include <QColorDialog>
@@ -122,11 +123,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     loadEditorSettings();
     QSettings panelSettings = makeAppSettings();
     mainSplitter->restoreState(panelSettings.value("window/mainSplitter").toByteArray());
-    topPaneSplitter->restoreState(panelSettings.value("window/topSplitter").toByteArray());
-    clipSidebar->setVisible(panelSettings.value("window/mediaVisible", true).toBool());
-    timelineTools->parentWidget()->parentWidget()->setVisible(panelSettings.value("window/toolsVisible", true).toBool());
-    viewMenu->actions()[0]->setChecked(!clipSidebar->isHidden());
-    viewMenu->actions()[1]->setChecked(!timelineTools->parentWidget()->parentWidget()->isHidden());
+    if (panelSettings.value("appearance/themeVersion", 1).toInt() >= 6)
+        topPaneSplitter->restoreState(panelSettings.value("window/topSplitter").toByteArray());
+    viewMenu->actions()[0]->setChecked(panelSettings.value("window/mediaVisible", true).toBool());
+    viewMenu->actions()[1]->setChecked(panelSettings.value("window/toolsVisible", true).toBool());
+    libraryTabs->setCurrentIndex(panelSettings.value("window/libraryPage", 0).toInt() == 1 &&
+                                 libraryTabs->isTabVisible(1) ? 1 : libraryTabs->isTabVisible(0) ? 0 : 1);
     this->setAcceptDrops(true);
     DropFilter* filter = new DropFilter([this](const QString &path) {
         loadClipDirectly(path);
@@ -187,12 +189,11 @@ void MainWindow::setupUi() {
     timelineTools = new QFrame();
     timelineTools->setObjectName("timelineTools");
     timelineTools->setMinimumWidth(180);
-    timelineTools->setMaximumWidth(300);
     timelineToolsLayout = new QVBoxLayout(timelineTools);
     timelineToolsLayout->setContentsMargins(12, 12, 12, 12);
-    timelineToolsLayout->setSpacing(8);
+    timelineToolsLayout->setSpacing(4);
 
-    toolHeaderLabel = new QLabel("Inspector");
+    toolHeaderLabel = new QLabel("Add an effect");
     toolHeaderLabel->setObjectName("SectionHeader");
     timelineToolsLayout->addWidget(toolHeaderLabel);
 
@@ -204,8 +205,8 @@ void MainWindow::setupUi() {
     blurBtn = new DragToolButton(0, "Blur");
     pixelBtn = new DragToolButton(1, "Pixelate");
     solidBtn = new DragToolButton(2, "Blackout");
-    shapeBtn = new DragToolButton(4, "Shape or arrow");
-    colorCorrectBtn = new DragToolButton(5, "Color correction");
+    shapeBtn = new DragToolButton(4, "Shape");
+    colorCorrectBtn = new DragToolButton(5, "Color");
     actionsGroupLabel = new QLabel("Clip actions");
     actionsGroupLabel->setObjectName("InspectorGroupLabel");
     autoCutBtn = new QPushButton("Auto-cut silence");
@@ -215,6 +216,12 @@ void MainWindow::setupUi() {
                                  autoCutBtn, resetCropBtn, speedRampBtn}) {
         button->setProperty("class", "ToolBtn");
         button->setLayoutDirection(Qt::LeftToRight);
+        button->setMinimumHeight(32);
+        button->setCursor(Qt::PointingHandCursor);
+    }
+    for (QPushButton *button : {textBtn, blurBtn, pixelBtn, solidBtn, shapeBtn, colorCorrectBtn}) {
+        button->setProperty("class", "EffectTile");
+        button->setMinimumHeight(44);
     }
     textBtn->setToolTip("Click to add at the playhead, or drag onto the viewer");
     blurBtn->setToolTip("Click to add at the playhead, or drag onto the viewer");
@@ -238,25 +245,31 @@ void MainWindow::setupUi() {
     timelineToolsLayout->addWidget(speedRampBtn);
     timelineToolsLayout->addStretch();
 
-    topPaneSplitter->addWidget(clipSidebar);
-    topPaneSplitter->addWidget(workspace);
-    auto *toolScroll = new QScrollArea(topPaneSplitter);
+    libraryTabs = new QTabWidget(topPaneSplitter);
+    libraryTabs->setObjectName("LibraryTabs");
+    libraryTabs->setMinimumWidth(220);
+    libraryTabs->setMaximumWidth(420);
+    libraryTabs->setDocumentMode(true);
+    libraryTabs->setAccessibleName("Media and effects library");
+    auto *toolScroll = new QScrollArea(libraryTabs);
     toolScroll->setObjectName("ToolScroll");
     toolScroll->setWidgetResizable(true);
     toolScroll->setFrameShape(QFrame::NoFrame);
     toolScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     toolScroll->setMinimumWidth(188);
-    toolScroll->setMaximumWidth(320);
     toolScroll->setWidget(timelineTools);
-    topPaneSplitter->addWidget(toolScroll);
+    libraryTabs->addTab(clipSidebar, "Media");
+    libraryTabs->addTab(toolScroll, "Effects");
+    topPaneSplitter->addWidget(libraryTabs);
+    topPaneSplitter->addWidget(workspace);
     topPaneSplitter->setStretchFactor(1, 1);
-    topPaneSplitter->setSizes({240, 800, 200});
+    topPaneSplitter->setSizes({260, 1000});
 
     mainSplitter->addWidget(topPaneSplitter);
     setupTimeline();
     mainSplitter->addWidget(timelineShell);
     mainSplitter->setStretchFactor(0, 1);
-    mainSplitter->setSizes({600, 240});
+    mainSplitter->setSizes({540, 280});
 
     auto* splitterWrap = new QWidget(centralWidget);
     auto* splitterWrapLayout = new QVBoxLayout(splitterWrap);
@@ -310,6 +323,12 @@ void MainWindow::updateMaximizedState() {
 
 void MainWindow::resizeEvent(QResizeEvent *event) {
     QMainWindow::resizeEvent(event);
+    if (commandBtn) {
+        const bool compact = width() < 1100;
+        commandBtn->setText(compact ? QString() : QStringLiteral("Actions"));
+        commandBtn->setMinimumWidth(compact ? 36 : 90);
+    }
+    if (exportInput) exportInput->setFixedWidth(width() < 1100 ? 130 : 180);
     constexpr int m = 6;   // edge grip thickness
     constexpr int c = 12;  // corner grip size
     const int w = width();
@@ -340,7 +359,8 @@ void MainWindow::setupToolbar() {
     toolbar->setObjectName("toolbar");
     auto* toolbarLayout = new QHBoxLayout(toolbar);
     toolbarLayout->setContentsMargins(16, 0, 12, 0);
-    toolbarLayout->setSpacing(10);
+    toolbarLayout->setSpacing(8);
+    toolbar->setMinimumHeight(58);
 
     auto* logoLayout = new QHBoxLayout();
     logoLayout->setSpacing(5);
@@ -389,9 +409,11 @@ void MainWindow::setupToolbar() {
     exportBtn->setMenu(exportMenu);
     toolbarLayout->addWidget(exportBtn);
 
-    commandBtn = new QPushButton("Find action");
+    commandBtn = new QPushButton("Actions");
     commandBtn->setObjectName("PrimaryGhostBtn");
     commandBtn->setToolTip("Search tools and commands (Ctrl+K)");
+    commandBtn->setAccessibleName("Find an action");
+    commandBtn->setCursor(Qt::PointingHandCursor);
     connect(commandBtn, &QPushButton::clicked, this, &MainWindow::showCommandPalette);
     auto *commandShortcut = new QShortcut(QKeySequence("Ctrl+K"), this);
     connect(commandShortcut, &QShortcut::activated, this, &MainWindow::showCommandPalette);
@@ -405,12 +427,12 @@ void MainWindow::setupToolbar() {
     auto *mediaAction = viewMenu->addAction("Media panel");
     mediaAction->setCheckable(true);
     mediaAction->setChecked(true);
-    connect(mediaAction, &QAction::toggled, this, [this](bool visible) { clipSidebar->setVisible(visible); });
+    connect(mediaAction, &QAction::toggled, this, [this](bool visible) { setLibraryPageVisible(0, visible); });
     auto *toolsAction = viewMenu->addAction("Effects panel");
     toolsAction->setCheckable(true);
     toolsAction->setChecked(true);
     connect(toolsAction, &QAction::toggled, this, [this](bool visible) {
-        timelineTools->parentWidget()->parentWidget()->setVisible(visible);
+        setLibraryPageVisible(1, visible);
     });
     viewMenu->addSeparator();
     connect(viewMenu->addAction("Reset panel layout"), &QAction::triggered, this, &MainWindow::resetPanelLayout);
@@ -432,6 +454,28 @@ void MainWindow::setupToolbar() {
     settingsBtn->setCursor(Qt::PointingHandCursor);
     toolbarLayout->addWidget(settingsBtn);
 
+    const QList<QWidget*> toolbarControls = {commandBtn, viewBtn, helpBtn, settingsBtn,
+                                            importBtn, exportInput, exportBtn};
+    for (QWidget *control : toolbarControls)
+        toolbarLayout->removeWidget(control);
+    toolbarLayout->addWidget(commandBtn);
+    toolbarLayout->addWidget(viewBtn);
+    toolbarLayout->addWidget(helpBtn);
+    toolbarLayout->addWidget(settingsBtn);
+    auto *actionDivider = new QFrame(toolbar);
+    actionDivider->setObjectName("ToolbarDivider");
+    actionDivider->setFixedSize(1, 24);
+    toolbarLayout->addWidget(actionDivider);
+    toolbarLayout->addWidget(importBtn);
+    toolbarLayout->addWidget(exportInput);
+    toolbarLayout->addWidget(exportBtn);
+    QWidget::setTabOrder(commandBtn, viewBtn);
+    QWidget::setTabOrder(viewBtn, helpBtn);
+    QWidget::setTabOrder(helpBtn, settingsBtn);
+    QWidget::setTabOrder(settingsBtn, importBtn);
+    QWidget::setTabOrder(importBtn, exportInput);
+    QWidget::setTabOrder(exportInput, exportBtn);
+
     mainLayout->addWidget(toolbar);
 }
 
@@ -445,13 +489,13 @@ void MainWindow::setupSidebar() {
     previewHeader = new QFrame();
     auto* previewHeaderLayout = new QHBoxLayout(previewHeader);
     previewHeaderLayout->setContentsMargins(0, 0, 0, 0);
-    auto* mediaHeader = new QLabel("Media");
+    auto* mediaHeader = new QLabel("Your files");
     mediaHeader->setObjectName("SectionHeader");
     previewHeaderLayout->addWidget(mediaHeader);
     previewHeaderLayout->addStretch();
     sidebarImportBtn = new QPushButton();
     sidebarImportBtn->setProperty("class", "IconBtn");
-    sidebarImportBtn->setFixedSize(24, 24);
+    sidebarImportBtn->setFixedSize(32, 32);
     sidebarImportBtn->setToolTip("Import media");
     sidebarImportBtn->setCursor(Qt::PointingHandCursor);
     previewHeaderLayout->addWidget(sidebarImportBtn);
@@ -470,7 +514,7 @@ void MainWindow::setupSidebar() {
     sidebarContent = new QWidget();
     sidebarListLayout = new QVBoxLayout(sidebarContent);
     sidebarListLayout->setContentsMargins(0, 0, 0, 0);
-    sidebarListLayout->setSpacing(2);
+    sidebarListLayout->setSpacing(4);
     sidebarListLayout->setAlignment(Qt::AlignTop);
     sidebarScroll->setWidget(sidebarContent);
     sidebarLayout->addWidget(sidebarScroll);
@@ -491,8 +535,8 @@ void MainWindow::setupWorkspace() {
     workspace = new QFrame();
     workspace->setObjectName("workspace");
     stageColumnLayout = new QVBoxLayout(workspace);
-    stageColumnLayout->setContentsMargins(14, 14, 14, 14);
-    stageColumnLayout->setSpacing(10);
+    stageColumnLayout->setContentsMargins(0, 0, 0, 0);
+    stageColumnLayout->setSpacing(0);
 
     workspaceContentLayout = new QHBoxLayout();
 
@@ -510,21 +554,18 @@ void MainWindow::setupWorkspace() {
     videoInternalLayout->addWidget(videoWithCrop);
     videoInternalLayout->setCurrentWidget(videoWithCrop);
     videoWithCrop->raise();
-    auto *viewerHeader = new QHBoxLayout();
-    auto *viewerTitle = new QLabel("Preview");
-    viewerTitle->setObjectName("SectionHeader");
-    viewerHeader->addWidget(viewerTitle);
-    viewerHeader->addStretch();
     timecodeLabel = new QLabel("00:00.000 / 00:00.000");
     timecodeLabel->setObjectName("TimecodeLabel");
     timecodeLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    viewerHeader->addWidget(timecodeLabel);
-    stageColumnLayout->addLayout(viewerHeader);
     stageColumnLayout->addWidget(videoContainer, 1);
     emptyPreviewPanel = new QWidget(videoWithCrop);
     auto *emptyPanelLayout = new QVBoxLayout(emptyPreviewPanel);
     emptyPanelLayout->setContentsMargins(8, 8, 8, 8);
-    emptyPanelLayout->setSpacing(12);
+    emptyPanelLayout->setSpacing(8);
+    auto *emptyMark = new QLabel(emptyPreviewPanel);
+    emptyMark->setObjectName("EmptyMediaMark");
+    emptyMark->setAlignment(Qt::AlignCenter);
+    emptyPanelLayout->addWidget(emptyMark);
     auto *emptyTitle = new QLabel(editorSettings.previewPlaceholderTitle, emptyPreviewPanel);
     emptyTitle->setObjectName("EmptyPreviewTitle");
     emptyTitle->setAlignment(Qt::AlignCenter);
@@ -533,15 +574,21 @@ void MainWindow::setupWorkspace() {
     emptyBody->setObjectName("EmptyPreviewBody");
     emptyBody->setAlignment(Qt::AlignCenter);
     emptyBody->setWordWrap(true);
-    emptyImportBtn = new QPushButton("Import media…  Ctrl+O", emptyPreviewPanel);
+    emptyImportBtn = new QPushButton("Import media", emptyPreviewPanel);
     emptyImportBtn->setObjectName("EmptyImportBtn");
     emptyImportBtn->setCursor(Qt::PointingHandCursor);
+    emptyImportBtn->setToolTip("Import video or audio (Ctrl+O)");
     emptyPanelLayout->addWidget(emptyTitle);
     emptyPanelLayout->addWidget(emptyBody);
     emptyPanelLayout->addWidget(emptyImportBtn, 0, Qt::AlignHCenter);
+    auto *importShortcutHint = new QLabel("Ctrl+O", emptyPreviewPanel);
+    importShortcutHint->setObjectName("SubtleHint");
+    importShortcutHint->setAlignment(Qt::AlignCenter);
+    emptyPanelLayout->addWidget(importShortcutHint);
     auto *emptyLayout = new QVBoxLayout(videoWithCrop);
     emptyLayout->setContentsMargins(16, 16, 16, 16);
     emptyLayout->addStretch();
+    videoWithCrop->installEventFilter(this);
     emptyLayout->addWidget(emptyPreviewPanel);
     emptyLayout->addStretch();
     connect(emptyImportBtn, &QPushButton::clicked, this, &MainWindow::importMedia);
@@ -552,12 +599,13 @@ void MainWindow::setupWorkspace() {
     auto* transportLayout = new QHBoxLayout(transportBar);
     transportLayout->setContentsMargins(12, 5, 12, 5);
     transportLayout->setSpacing(6);
+    transportLayout->addWidget(timecodeLabel, 0, Qt::AlignVCenter);
 
 
 
     transportLayout->addStretch();
 
-    auto makeTransportBtn = [](const QString &tooltip, int size = 34) {
+    auto makeTransportBtn = [](const QString &tooltip, int size = 36) {
         auto* btn = new QPushButton();
         btn->setProperty("class", "IconBtn");
         btn->setFixedSize(size, size);
@@ -571,7 +619,7 @@ void MainWindow::setupWorkspace() {
     stepBackBtn = makeTransportBtn("Previous frame");
     playPauseBtn = new QPushButton();
     playPauseBtn->setObjectName("ActionBtn");
-    playPauseBtn->setFixedSize(42, 42);
+    playPauseBtn->setFixedSize(44, 36);
     playPauseBtn->setIconSize(QSize(20, 20));
     playPauseBtn->setCursor(Qt::PointingHandCursor);
     playPauseBtn->setFocusPolicy(Qt::NoFocus);
@@ -626,6 +674,7 @@ void MainWindow::setupWorkspace() {
 void MainWindow::setupTimeline() {
     timelineShell = new QFrame();
     timelineShell->setObjectName("TimelineShell");
+    timelineShell->setMinimumHeight(268);
     auto* timelineShellLayout = new QVBoxLayout(timelineShell);
     timelineShellLayout->setContentsMargins(12, 12, 12, 12);
     timelineShellLayout->setSpacing(8);
@@ -641,7 +690,7 @@ void MainWindow::setupTimeline() {
     auto makeEditBtn = [](const QString &tooltip) {
         auto* btn = new QPushButton();
         btn->setProperty("class", "IconBtn");
-        btn->setFixedSize(28, 28);
+        btn->setFixedSize(32, 32);
         btn->setToolTip(tooltip);
         btn->setCursor(Qt::PointingHandCursor);
         btn->setFocusPolicy(Qt::NoFocus);
@@ -650,7 +699,7 @@ void MainWindow::setupTimeline() {
     undoBtn = makeEditBtn("Undo");
     redoBtn = makeEditBtn("Redo");
     historyBtn = makeEditBtn("Edit history");
-    historyBtn->setFixedSize(18, 28);
+    historyBtn->setFixedSize(24, 32);
     splitBtn = makeEditBtn("Split clip at playhead");
     deleteClipBtn = makeEditBtn("Delete selected clips");
     timelineHeader->addWidget(undoBtn);
@@ -1119,7 +1168,7 @@ void MainWindow::updateTimelineChips() {
     }
 
     if (timeline->sourceHasAudio()) {
-        audioTrackChip->setText(timeline->currentAudioTrackName().toUpper());
+        audioTrackChip->setText(timeline->currentAudioTrackName());
         audioTrackChip->setVisible(true);
     } else {
         audioTrackChip->hide();
@@ -1127,7 +1176,7 @@ void MainWindow::updateTimelineChips() {
 
     const double mb = timeline->estimatedExportSizeMB();
     if (mb > 0.0) {
-        estSizeChip->setText(QString("EST %1 MB").arg(mb, 0, 'f', mb < 10.0 ? 2 : 1));
+        estSizeChip->setText(QString("≈ %1 MB").arg(mb, 0, 'f', mb < 10.0 ? 2 : 1));
         estSizeChip->setProperty("tone", mb <= 25.0 ? "good" : mb <= 100.0 ? "" : "warn");
         estSizeChip->style()->unpolish(estSizeChip);
         estSizeChip->style()->polish(estSizeChip);
@@ -1215,8 +1264,6 @@ void MainWindow::loadEditorSettings() {
         return settings.contains("ui/" + key) ? settings.value("ui/" + key, fallback)
                                               : settings.value("general/" + key, fallback);
     };
-    // Theme version 4 deepens the Resolve-inspired palette and panel hierarchy.
-    // Older palette values are ignored once; project and workflow settings remain.
     const int themeVersion = settings.value("appearance/themeVersion", 1).toInt();
     editorSettings.loadNewestVideoOnStartup = uiValue("loadNewestVideoOnStartup", true).toBool();
     editorSettings.autoPlayOnImport = uiValue("autoPlayOnImport", editorSettings.autoPlayOnImport).toBool();
@@ -1280,6 +1327,72 @@ void MainWindow::loadEditorSettings() {
     editorSettings.panelCornerRadius = settings.value("appearance/panelCornerRadius", editorSettings.panelCornerRadius).toInt();
     editorSettings.buttonCornerRadius = settings.value("appearance/buttonCornerRadius", editorSettings.buttonCornerRadius).toInt();
     }
+    // Upgrade only stock values; keep deliberately customized appearance.
+    if (themeVersion == 4) {
+        const EditorSettings defaults;
+        if (editorSettings.timelineAccentColor == "#4A86A3") editorSettings.timelineAccentColor = defaults.timelineAccentColor;
+        if (editorSettings.timelineSecondaryColor == "#315F75") editorSettings.timelineSecondaryColor = defaults.timelineSecondaryColor;
+        if (editorSettings.appFontFamily == "Sans Serif") editorSettings.appFontFamily = defaults.appFontFamily;
+        if (editorSettings.logoPrimaryText == "POTATO") editorSettings.logoPrimaryText = defaults.logoPrimaryText;
+        if (editorSettings.logoSecondaryText == "STUDIO") editorSettings.logoSecondaryText = defaults.logoSecondaryText;
+        if (editorSettings.importButtonText == "Import Media") editorSettings.importButtonText = defaults.importButtonText;
+    }
+    if (themeVersion >= 4 && themeVersion < 6) {
+        const EditorSettings defaults;
+        const QList<QPair<QString*, QPair<QString, QString>>> stockPalette = {
+            {&editorSettings.timelineAccentColor, {"#D46252", defaults.timelineAccentColor}},
+            {&editorSettings.timelineSecondaryColor, {"#E0E0E2", defaults.timelineSecondaryColor}},
+            {&editorSettings.timelineBackgroundColor, {"#101214", defaults.timelineBackgroundColor}},
+            {&editorSettings.timelineTrackColor, {"#252A2D", defaults.timelineTrackColor}},
+            {&editorSettings.timelineWaveformColor, {"#9CB8C4", defaults.timelineWaveformColor}},
+            {&editorSettings.previewAccentColor, {"#D46252", defaults.previewAccentColor}},
+            {&editorSettings.previewSecondaryColor, {"#A9473B", defaults.previewSecondaryColor}},
+            {&editorSettings.previewBackgroundColor, {"#030303", defaults.previewBackgroundColor}},
+            {&editorSettings.appBackgroundStartColor, {"#0B0B0C", defaults.appBackgroundStartColor}},
+            {&editorSettings.appBackgroundEndColor, {"#101011", defaults.appBackgroundEndColor}},
+            {&editorSettings.panelSurfaceColor, {"#1B1B1D", defaults.panelSurfaceColor}},
+            {&editorSettings.panelAltSurfaceColor, {"#131315", defaults.panelAltSurfaceColor}},
+            {&editorSettings.controlSurfaceColor, {"#29292C", defaults.controlSurfaceColor}},
+            {&editorSettings.controlHoverColor, {"#39393D", defaults.controlHoverColor}},
+            {&editorSettings.borderColor, {"#55555C", defaults.borderColor}},
+            {&editorSettings.primaryTextColor, {"#E0E0E2", defaults.primaryTextColor}},
+            {&editorSettings.mutedTextColor, {"#A1A1A7", defaults.mutedTextColor}},
+            {&editorSettings.sectionLabelColor, {"#C4C4C8", defaults.sectionLabelColor}},
+            {&editorSettings.logoPrimaryColor, {"#E2E2E2", defaults.logoPrimaryColor}},
+            {&editorSettings.logoSecondaryColor, {"#A6A6A6", defaults.logoSecondaryColor}}
+        };
+        for (const auto &entry : stockPalette)
+            if (*entry.first == entry.second.first) *entry.first = entry.second.second;
+    }
+    if (themeVersion == 6) {
+        const EditorSettings defaults;
+        const QList<QPair<QString*, QPair<QString, QString>>> stockPalette = {
+            {&editorSettings.timelineAccentColor, {"#684890", defaults.timelineAccentColor}},
+            {&editorSettings.timelineSecondaryColor, {"#684890", defaults.timelineSecondaryColor}},
+            {&editorSettings.timelineBackgroundColor, {"#F7F6F9", defaults.timelineBackgroundColor}},
+            {&editorSettings.timelineTrackColor, {"#ECEAF0", defaults.timelineTrackColor}},
+            {&editorSettings.timelineWaveformColor, {"#527E70", defaults.timelineWaveformColor}},
+            {&editorSettings.previewAccentColor, {"#684890", defaults.previewAccentColor}},
+            {&editorSettings.previewSecondaryColor, {"#527E70", defaults.previewSecondaryColor}},
+            {&editorSettings.previewBackgroundColor, {"#F0EEF4", defaults.previewBackgroundColor}},
+            {&editorSettings.appBackgroundStartColor, {"#FAF9FC", defaults.appBackgroundStartColor}},
+            {&editorSettings.appBackgroundEndColor, {"#F5F4F8", defaults.appBackgroundEndColor}},
+            {&editorSettings.panelSurfaceColor, {"#FFFFFF", defaults.panelSurfaceColor}},
+            {&editorSettings.panelAltSurfaceColor, {"#F7F6FA", defaults.panelAltSurfaceColor}},
+            {&editorSettings.controlSurfaceColor, {"#F0EDF5", defaults.controlSurfaceColor}},
+            {&editorSettings.controlHoverColor, {"#E7E1EF", defaults.controlHoverColor}},
+            {&editorSettings.borderColor, {"#C9C4D2", defaults.borderColor}},
+            {&editorSettings.primaryTextColor, {"#302B39", defaults.primaryTextColor}},
+            {&editorSettings.mutedTextColor, {"#6F677B", defaults.mutedTextColor}},
+            {&editorSettings.sectionLabelColor, {"#4D445A", defaults.sectionLabelColor}},
+            {&editorSettings.logoPrimaryColor, {"#302B39", defaults.logoPrimaryColor}},
+            {&editorSettings.logoSecondaryColor, {"#684890", defaults.logoSecondaryColor}},
+        };
+        for (const auto &entry : stockPalette)
+            if (*entry.first == entry.second.first) *entry.first = entry.second.second;
+    }
+    if (themeVersion < 6 && editorSettings.previewPlaceholderTitle == "Start with a media file")
+        editorSettings.previewPlaceholderTitle = EditorSettings().previewPlaceholderTitle;
     editorSettings.keyPlayPause = settings.value("keybinds/playPause", editorSettings.keyPlayPause).toString();
     editorSettings.keySplit = settings.value("keybinds/split", editorSettings.keySplit).toString();
     editorSettings.keyDeleteClip = settings.value("keybinds/deleteClip", editorSettings.keyDeleteClip).toString();
@@ -1332,7 +1445,7 @@ void MainWindow::loadEditorSettings() {
 void MainWindow::saveEditorSettings() const {
     QSettings settings = makeAppSettings();
     settings.remove("general");
-    settings.setValue("appearance/themeVersion", 4);
+    settings.setValue("appearance/themeVersion", 7);
     settings.setValue("ui/loadNewestVideoOnStartup", editorSettings.loadNewestVideoOnStartup);
     settings.setValue("ui/autoPlayOnImport", editorSettings.autoPlayOnImport);
     settings.setValue("ui/checkForUpdatesOnStartup", editorSettings.checkForUpdatesOnStartup);
@@ -1465,15 +1578,13 @@ void MainWindow::applyEditorSettings() {
 
     recentFilesScanned = false;
 
-    if (topPaneSplitter && clipSidebar && timelineTools && workspace) {
+    if (topPaneSplitter && libraryTabs && workspace) {
         if (editorSettings.sidebarPosition == "right") {
             topPaneSplitter->insertWidget(0, workspace);
-            topPaneSplitter->insertWidget(1, timelineTools->parentWidget()->parentWidget());
-            topPaneSplitter->insertWidget(2, clipSidebar);
+            topPaneSplitter->insertWidget(1, libraryTabs);
         } else {
-            topPaneSplitter->insertWidget(0, clipSidebar);
+            topPaneSplitter->insertWidget(0, libraryTabs);
             topPaneSplitter->insertWidget(1, workspace);
-            topPaneSplitter->insertWidget(2, timelineTools->parentWidget()->parentWidget());
         }
     }
 
@@ -1525,16 +1636,16 @@ QString MainWindow::buildAppStyleSheet() const {
     const QColor controlSurfaceColor(controlSurface);
     const QColor controlHoverColor(controlHover);
     const QColor borderColor(border);
-    const QString toolbarSurface = panelSurfaceColor.darker(112).name(QColor::HexRgb);
-    const QString sidebarSurface = panelSurfaceColor.darker(106).name(QColor::HexRgb);
-    const QString inspectorSurface = panelSurfaceColor.lighter(108).name(QColor::HexRgb);
+    const QString toolbarSurface = panelSurface;
+    const QString sidebarSurface = panelSurface;
+    const QString inspectorSurface = panelSurface;
     const QString transportSurface = panelSurfaceColor.lighter(104).name(QColor::HexRgb);
     auto withAlpha = [](QColor color, int alpha) {
         color.setAlpha(alpha);
         return color.name(QColor::HexArgb);
     };
-    const QString frameBorder = withAlpha(borderColor, 60);
-    const QString subtleBorder = withAlpha(borderColor, 40);
+    const QString frameBorder = withAlpha(borderColor, 150);
+    const QString subtleBorder = withAlpha(borderColor, 95);
     const QString chipBg = withAlpha(accentColor, 22);
     const QString chipBorder = withAlpha(accentColor, 58);
     const QString accentSoft = withAlpha(accentColor, 40);
@@ -1556,10 +1667,11 @@ QWidget#centralWidget {
 }
 QWidget#centralWidget[maximized="true"] { border-radius: 0; border: none; }
 QDialog, QMessageBox { background: @bgEnd; }
+QToolTip { background: @panel; color: @text; border: 1px solid @frameBorder; }
 
 QWidget#AppTitleBar { background: transparent; border: none; }
 QLabel#AppMark { background: transparent; }
-QLabel#TitleBarLabel { color: @muted; font-size: 9pt; font-weight: 600; letter-spacing: 1px; }
+QLabel#TitleBarLabel { color: @muted; font-size: 9pt; font-weight: 400; }
 QPushButton#WinBtn, QPushButton#CloseBtn {
     background: transparent;
     border: 1px solid transparent;
@@ -1571,32 +1683,28 @@ QPushButton#CloseBtn:hover { background: rgba(232, 68, 68, 0.85); border-color: 
 QFrame#toolbar {
     background: @toolbarSurface;
     border: none;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.65);
+    border-bottom: 1px solid @frameBorder;
     border-radius: 0;
 }
+QFrame#ToolbarDivider { background: @frameBorder; border: none; }
 QFrame#workspace, QFrame#footer, QFrame#clipSidebar, QFrame#PanelHeader,
 QWidget#timelineTools, QFrame#ActionStrip, QFrame#TimelineShell {
     background: @panel;
     border: none;
     border-radius: 0;
 }
-QFrame#clipSidebar { background: @sidebarSurface; border-right: 1px solid @frameBorder; }
-QWidget#timelineTools { background: @inspectorSurface; border-left: 1px solid @frameBorder; }
+QFrame#clipSidebar { background: @sidebarSurface; border: none; }
+QWidget#timelineTools { background: @inspectorSurface; border: none; }
 QFrame#TimelineShell { background: @timelineBg; border-top: 1px solid @frameBorder; }
 QFrame#workspace { background: @bgEnd; }
-QFrame#TransportBar {
-    background: @transportSurface;
-    border: none;
-    border-top: 1px solid @subtleBorder;
-    border-radius: 0;
-}
-QFrame#VideoContainer { background: @previewBg; border: 1px solid @subtleBorder; border-radius: 2px; }
+QFrame#TransportBar { background: transparent; border: none; }
+QFrame#VideoContainer { background: @previewBg; border: none; border-radius: 0; }
 VideoWithCropWidget#VideoSurface { background-color: @previewBg; }
 
 QLabel#LogoBold { color: @logo1; font-size: @logoFontSizept; }
 QLabel#LogoLight { color: @logo2; font-size: @logoFontSizept; }
 QLabel#SectionHeader { color: @section; }
-QLabel#SectionLabel, QLabel#InputLabel, QLabel#HeroEyebrow, QLabel#InspectorGroupLabel { color: @section; }
+QLabel#SectionLabel, QLabel#InputLabel, QLabel#HeroEyebrow, QLabel#InspectorGroupLabel { color: @muted; }
 QLabel#MetaData, QLabel#SubtleHint, QLabel#VersionLabel, QLabel#EmptyStateLabel, QLabel#HeroBody { color: @muted; font-size: @metaFontSizept; }
 QLabel#SidebarTitle { color: @text; }
 QLabel#SidebarCountLabel { color: @section; }
@@ -1606,8 +1714,8 @@ QDialog QLabel { color: @text; }
 QFormLayout QLabel { color: @muted; }
 
 QLabel#TimecodeLabel {
-    background: @timelineBg;
-    border: 1px solid @subtleBorder;
+    background: transparent;
+    border: none;
     border-radius: @btnRadiuspx;
     color: @text;
 }
@@ -1618,6 +1726,8 @@ QLabel#MiniBadge {
     color: @muted;
     font-size: @badgeFontSizept;
 }
+QLabel#MiniBadge[tone="good"] { color: #6FD4AC; }
+QLabel#MiniBadge[tone="warn"] { color: #F08B85; }
 
 QPushButton { color: @text; }
 QPushButton#ActionBtn { background: @accent; border: none; border-radius: @bigButtonRadiuspx; }
@@ -1636,7 +1746,8 @@ QPushButton#ExportBtn:pressed { background: @accentPressed; }
 QPushButton#ExportBtn:disabled { background: @control; color: @muted; }
 
 QPushButton[class="IconBtn"] { background: transparent; border: 1px solid transparent; border-radius: @btnRadiuspx; }
-QPushButton[class="IconBtn"]:hover { background: @hoverWash; border-color: @subtleBorder; }
+QPushButton[class="IconBtn"]:hover { background: @controlHover; border-color: @subtleBorder; }
+QPushButton[class="IconBtn"]:pressed { background: @control; border-color: @accentGlow; }
 QPushButton[class="IconBtn"]:checked { background: @chipBg; border-color: @accentSoft; }
 
 QPushButton#PrimaryGhostBtn, QPushButton[class="ToolBtn"], QPushButton#FullscreenBtn,
@@ -1647,12 +1758,21 @@ QDialogButtonBox QPushButton, QComboBox, QAbstractSpinBox, QLineEdit, QKeySequen
     color: @text;
     selection-background-color: @accentSoft;
 }
+QLineEdit { placeholder-text-color: @muted; }
 QPushButton[class="ToolBtn"] {
     background: transparent;
     border-color: transparent;
-    border-radius: 3px;
-    padding: 7px 8px;
+    border-radius: @btnRadiuspx;
+    padding: 3px 8px;
 }
+QPushButton[class="EffectTile"] {
+    background: @control; color: @text; border: 1px solid @subtleBorder;
+    border-radius: @btnRadiuspx; padding: 6px 8px; font-size: 9pt; font-weight: 500;
+}
+QPushButton[class="EffectTile"]:hover { background: @controlHover; border-color: @accentSoft; }
+QPushButton[class="EffectTile"]:pressed { background: @chipBg; border-color: @accent; }
+QPushButton[class="EffectTile"]:focus { border-color: @accent; }
+QPushButton[class="EffectTile"]:disabled { background: @panelAlt; color: @muted; }
 QPushButton#PrimaryGhostBtn:hover, QPushButton[class="ToolBtn"]:hover, QPushButton#FullscreenBtn:hover,
 QDialogButtonBox QPushButton:hover, QComboBox:hover, QAbstractSpinBox:hover, QLineEdit:hover,
 QKeySequenceEdit:hover, QFontComboBox:hover {
@@ -1660,7 +1780,16 @@ QKeySequenceEdit:hover, QFontComboBox:hover {
     border-color: @accentSoft;
 }
 QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus, QKeySequenceEdit:focus, QFontComboBox:focus,
-QPushButton#PrimaryGhostBtn:focus, QPushButton[class="ToolBtn"]:focus { border-color: @accentGlow; }
+QPushButton#PrimaryGhostBtn:focus, QPushButton[class="ToolBtn"]:focus { border-color: @accent; }
+QPushButton:focus { border: 1px solid @accent; }
+QPushButton#PrimaryGhostBtn:pressed, QPushButton[class="ToolBtn"]:pressed, QDialogButtonBox QPushButton:pressed { background: @panelAlt; border-color: @accentGlow; }
+QPushButton[class="ToolBtn"]:disabled { background: transparent; border-color: transparent; color: @muted; }
+QPushButton:disabled, QMenu::item:disabled { color: @muted; }
+QPushButton#EmptyImportBtn { background: @accent; color: @onAccent; border: 1px solid @accent; border-radius: @btnRadiuspx; }
+QPushButton#EmptyImportBtn:hover { background: @accentHover; border-color: @accentHover; }
+QPushButton#EmptyImportBtn:pressed { background: @accentPressed; }
+QLabel#EmptyPreviewTitle { color: @text; }
+QLabel#EmptyPreviewBody { color: @muted; }
 QLineEdit#ExportNameInput { background: @panelAlt; }
 
 QComboBox QAbstractItemView {
@@ -1690,10 +1819,31 @@ QCheckBox::indicator:checked { background: @accent; border-color: @accent; }
 QSlider::sub-page:horizontal { background: @accent; }
 QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: @accentSoft; }
 
-QWidget#SidebarItem { background: transparent; border: none; border-left: 2px solid transparent; border-radius: 0; }
-QWidget#SidebarItem[active="true"] { background: @control; border-left: 2px solid @accent; }
-QWidget#SidebarItem:hover { background: @hoverWash; }
-PreviewLabel#SidebarPreview { background: @previewBg; border: 1px solid @subtleBorder; border-radius: 2px; }
+QWidget#SidebarItem { background: transparent; border: 1px solid transparent; border-radius: @btnRadiuspx; }
+QWidget#SidebarItem:hover { background: @control; border-color: @subtleBorder; }
+QWidget#SidebarItem[active="true"] { background: @chipBg; border: 1px solid @accentSoft; }
+PreviewLabel#SidebarPreview { background: @previewBg; border: 1px solid @frameBorder; border-radius: 2px; }
+QSplitter::handle:hover { background: @accentGlow; }
+QDialog#CommandPalette { background: @panel; border: 1px solid @frameBorder; }
+QListWidget#CommandList::item { color: @text; }
+QListWidget#CommandList::item:selected { background: @controlHover; color: @text; }
+QListWidget#CommandList::item:disabled { color: @muted; }
+QTabWidget#LibraryTabs { background: @panel; border-right: 1px solid @frameBorder; }
+QTabWidget#LibraryTabs::pane { background: @panel; border: none; border-top: 1px solid @frameBorder; margin: 0; padding: 0; }
+QTabWidget#LibraryTabs QTabBar { background: @panel; }
+QTabWidget#LibraryTabs QTabBar::tab {
+    background: @panel; color: @muted; font-size: 10pt; font-weight: 500;
+    padding: 14px 24px; margin: 0; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+}
+QTabWidget#LibraryTabs QTabBar::tab:selected { color: @accent; border-bottom-color: @accent; }
+QTabWidget#LibraryTabs QTabBar::tab:hover:!selected { background: @control; color: @text; }
+QSlider::groove:horizontal { background: @frameBorder; }
+QSlider::handle:horizontal { background: @accent; border-color: @accent; }
+QSlider::handle:horizontal:hover { background: @accentHover; border-color: @accentHover; }
+QSplitter::handle { background: @bgEnd; }
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: @frameBorder; }
+QLabel#MiniBadge[tone="good"] { color: #83BBA6; }
+QLabel#MiniBadge[tone="warn"] { color: #F08B85; }
 
 QWidget#ProgressNotificationBg { background: @panelAlt; border: 1px solid @accentSoft; }
 QProgressBar#ProgressNotificationBar { background: @timelineBg; color: @text; }
@@ -1862,15 +2012,24 @@ void MainWindow::applyToolButtonOrder() {
 
     bool redactGroupShown = false;
     bool actionsGroupShown = false;
+    QGridLayout *effectGrid = nullptr;
+    int effectCount = 0;
     for (const QString &rawId : order) {
         const QString id = rawId.trimmed().toLower();
         for (const auto &pair : redactButtons) {
             if (pair.first == id && pair.second) {
                 if (!redactGroupShown && redactGroupLabel) {
                     timelineToolsLayout->addWidget(redactGroupLabel);
+                    effectGrid = new QGridLayout();
+                    effectGrid->setHorizontalSpacing(8);
+                    effectGrid->setVerticalSpacing(8);
+                    effectGrid->setColumnStretch(0, 1);
+                    effectGrid->setColumnStretch(1, 1);
+                    timelineToolsLayout->addLayout(effectGrid);
                     redactGroupShown = true;
                 }
-                timelineToolsLayout->addWidget(pair.second);
+                effectGrid->addWidget(pair.second, effectCount / 2, effectCount % 2);
+                ++effectCount;
             }
         }
         for (const auto &pair : actionButtons) {
@@ -1890,7 +2049,8 @@ void MainWindow::applyToolButtonOrder() {
 void MainWindow::applyIcons() {
     const QColor iconColor(withFallbackColor(editorSettings.primaryTextColor, "#EFEFF4"));
     const QColor mutedColor(withFallbackColor(editorSettings.mutedTextColor, "#9C9CA8"));
-    const QColor onAccent("#1C0E08");
+    const QColor accentColor(editorSettings.timelineAccentColor);
+    const QColor onAccent(accentColor.lightness() > 110 ? "#1C0E08" : "#FFFFFF");
 
     playIcon = Icons::play(onAccent);
     pauseIcon = Icons::pause(onAccent);
@@ -1902,7 +2062,7 @@ void MainWindow::applyIcons() {
     titleBar->minBtn->setIcon(Icons::winMinimize(iconColor));
     titleBar->maxBtn->setIcon(isMaximized() ? Icons::winRestore(iconColor) : Icons::winMaximize(iconColor));
     titleBar->closeBtn->setIcon(Icons::winClose(iconColor));
-    titleBar->setAppMarkColor(mutedColor);
+    titleBar->setAppMarkColor(accentColor);
 
     playPauseBtn->setIcon(player && player->playbackState() == QMediaPlayer::PlayingState ? pauseIcon : playIcon);
     jumpBackBtn->setIcon(Icons::jumpBack(iconColor));
@@ -1922,6 +2082,23 @@ void MainWindow::applyIcons() {
     deleteClipBtn->setIcon(Icons::trash(iconColor));
     exportBtn->setIcon(Icons::exportMedia(onAccent));
     exportBtn->setIconSize(QSize(14, 14));
+    importBtn->setIcon(Icons::importMedia(iconColor));
+    emptyImportBtn->setIcon(Icons::importMedia(onAccent));
+    if (auto *emptyMark = emptyPreviewPanel->findChild<QLabel*>("EmptyMediaMark"))
+        emptyMark->setPixmap(Icons::film(accentColor).pixmap(64, 64));
+    commandBtn->setIcon(Icons::search(mutedColor));
+    textBtn->setIcon(Icons::text(mutedColor));
+    blurBtn->setIcon(Icons::blur(mutedColor));
+    pixelBtn->setIcon(Icons::pixelate(mutedColor));
+    solidBtn->setIcon(Icons::blackout(mutedColor));
+    shapeBtn->setIcon(Icons::shape(mutedColor));
+    colorCorrectBtn->setIcon(Icons::colorCorrection(mutedColor));
+    autoCutBtn->setIcon(Icons::autoCut(mutedColor));
+    resetCropBtn->setIcon(Icons::crop(mutedColor));
+    speedRampBtn->setIcon(Icons::speedRamp(mutedColor));
+    for (QPushButton *button : {textBtn, blurBtn, pixelBtn, solidBtn, shapeBtn, colorCorrectBtn,
+                               autoCutBtn, resetCropBtn, speedRampBtn, importBtn, emptyImportBtn, commandBtn})
+        button->setIconSize(QSize(16, 16));
 
     const QSize small(15, 15);
     historyBtn->setIconSize(QSize(11, 11));
@@ -3267,8 +3444,9 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     QSettings settings = makeAppSettings();
     settings.setValue("window/mainSplitter", mainSplitter->saveState());
     settings.setValue("window/topSplitter", topPaneSplitter->saveState());
-    settings.setValue("window/mediaVisible", !clipSidebar->isHidden());
-    settings.setValue("window/toolsVisible", !timelineTools->parentWidget()->parentWidget()->isHidden());
+    settings.setValue("window/mediaVisible", libraryTabs->isTabVisible(0));
+    settings.setValue("window/toolsVisible", libraryTabs->isTabVisible(1));
+    settings.setValue("window/libraryPage", libraryTabs->currentIndex());
     QMainWindow::closeEvent(event);
 }
 
@@ -3456,6 +3634,12 @@ void MainWindow::updateSidebar() {
 }
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
+    if (obj == videoWithCrop && event->type() == QEvent::Resize) {
+        if (auto *emptyMark = emptyPreviewPanel->findChild<QLabel*>("EmptyMediaMark"))
+            emptyMark->setVisible(videoWithCrop->height() >= 250);
+        if (auto *shortcutHint = emptyPreviewPanel->findChild<QLabel*>("SubtleHint"))
+            shortcutHint->setVisible(videoWithCrop->height() >= 200);
+    }
     // The editing layer is hidden during native playback. Keep the viewer a
     // drop target without a transparent widget repainting over every frame.
     if (obj == nativeVideoWidget && (event->type() == QEvent::DragEnter ||

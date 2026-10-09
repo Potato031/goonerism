@@ -36,7 +36,7 @@ void MainWindow::checkForUpdates() {
 #ifdef Q_OS_WIN
                     if (name.endsWith(".zip")) downloadUrl = asset.toObject().value("browser_download_url").toString();
 #else
-                    if (name.endsWith(".AppImage")) downloadUrl = asset.toObject().value("browser_download_url").toString();
+                    if (name.endsWith(".appimage", Qt::CaseInsensitive)) downloadUrl = asset.toObject().value("browser_download_url").toString();
 #endif
                 }
 
@@ -82,7 +82,7 @@ void MainWindow::downloadUpdate(const QString &url) {
 #ifdef Q_OS_WIN
             QString fileName = folderDir + "/update.zip";
 #else
-            QString fileName = folderDir + "/update.AppImage";
+            QString fileName = folderDir + "/update.appimage";
 #endif
 
             QFile file(fileName);
@@ -153,11 +153,11 @@ void MainWindow::finalizeUpdate() {
         out << "#!/bin/bash\n"
             << "sleep 2\n"
             << "cd \"" << folderDir << "\"\n"
-            << "chmod +x update.AppImage\n"
+            << "chmod +x update.appimage\n"
             // Use quotes in case there are spaces in the user's directory name
-            << "mv \"update.AppImage\" \"potatoeditor.AppImage\"\n"
-            << "chmod +x \"potatoeditor.AppImage\"\n"
-            << "./\"potatoeditor.AppImage\" &\n"
+            << "mv \"update.appimage\" \"potatoeditor.appimage\"\n"
+            << "chmod +x \"potatoeditor.appimage\"\n"
+            << "./\"potatoeditor.appimage\" &\n"
             << "rm -- \"$0\"\n";
         shFile.close();
 

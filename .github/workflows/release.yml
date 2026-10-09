@@ -39,6 +39,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: PotatoEditor_windows.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -73,6 +75,9 @@ jobs:
           import os, pathlib, re
           header = pathlib.Path('src/Includes/mainWindow.h').read_text()
           version = re.search(r'CURRENT_VERSION\s*=\s*"([^"]+)"', header).group(1)
+          cmake = pathlib.Path('CMakeLists.txt').read_text()
+          project_version = re.search(r'project\(SimpleVideoEditor VERSION ([^\)]+)\)', cmake).group(1)
+          assert project_version == version, 'CMake and header versions must match'
           assert os.environ['GITHUB_REF_NAME'] == 'v' + version, 'Tag and header version must match'
           PY
 
@@ -87,6 +92,8 @@ jobs:
       - name: Upload Linux Release
         uses: softprops/action-gh-release@v2
         with:
-          files: appimage-build/potatoeditor.AppImage
+          files: appimage-build/potatoeditor.appimage
+          fail_on_unmatched_files: true
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -62,6 +62,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: PotatoEditor-linux-x86_64
-          path: appimage-build/potatoeditor.AppImage
+          path: appimage-build/potatoeditor.appimage
           if-no-files-found: error
           retention-days: 30

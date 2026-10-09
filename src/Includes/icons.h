@@ -286,6 +286,94 @@ inline QIcon help(const QColor &c) {
     }, c);
 }
 
+inline QIcon search(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawEllipse(QRectF(20, 18, 44, 44));
+        p.drawLine(QPointF(59, 59), QPointF(81, 81));
+    }, c);
+}
+
+inline QIcon film(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawRoundedRect(QRectF(14, 22, 72, 56), 5, 5);
+        p.drawLine(28, 24, 28, 76);
+        p.drawLine(72, 24, 72, 76);
+        for (int y : {39, 60}) {
+            p.drawLine(16, y, 26, y);
+            p.drawLine(74, y, 84, y);
+        }
+        QPainterPath triangle;
+        triangle.moveTo(43, 39); triangle.lineTo(59, 50); triangle.lineTo(43, 61); triangle.closeSubpath();
+        fillGlyph(p, triangle);
+    }, c, 4);
+}
+
+inline QIcon text(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawLine(22, 24, 78, 24);
+        p.drawLine(50, 24, 50, 78);
+        p.drawLine(35, 78, 65, 78);
+    }, c);
+}
+
+inline QIcon blur(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawEllipse(QRectF(22, 22, 56, 56));
+        p.drawLine(34, 32, 34, 68);
+        p.drawLine(50, 26, 50, 74);
+        p.drawLine(66, 32, 66, 68);
+    }, c, 7);
+}
+
+inline QIcon pixelate(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        for (int y : {22, 56}) for (int x : {22, 56})
+            p.drawRoundedRect(QRectF(x, y, 22, 22), 2, 2);
+    }, c, 7);
+}
+
+inline QIcon blackout(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawRoundedRect(QRectF(20, 28, 60, 44), 4, 4);
+        p.drawLine(31, 50, 69, 50);
+    }, c);
+}
+
+inline QIcon shape(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawRoundedRect(QRectF(20, 20, 43, 43), 3, 3);
+        p.drawEllipse(QRectF(43, 43, 37, 37));
+    }, c, 7);
+}
+
+inline QIcon colorCorrection(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        for (int x : {26, 50, 74}) p.drawLine(x, 22, x, 78);
+        p.drawLine(18, 39, 34, 39);
+        p.drawLine(42, 61, 58, 61);
+        p.drawLine(66, 44, 82, 44);
+    }, c, 7);
+}
+
+inline QIcon autoCut(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawLine(18, 50, 28, 50);
+        p.drawLine(28, 50, 36, 30);
+        p.drawLine(36, 30, 45, 72);
+        p.drawLine(45, 72, 56, 38);
+        p.drawLine(56, 38, 64, 50);
+        p.drawLine(64, 50, 82, 50);
+    }, c, 7);
+}
+
+inline QIcon speedRamp(const QColor &c) {
+    return makeIcon([](QPainter &p, const QRectF &) {
+        p.drawLine(22, 74, 42, 74);
+        p.drawLine(42, 74, 65, 27);
+        p.drawLine(65, 27, 80, 27);
+    }, c);
+}
+
 inline QIcon crop(const QColor &c) {
     return makeIcon([](QPainter &p, const QRectF &) {
         p.drawPolyline(QPolygonF({{30, 14}, {30, 70}, {86, 70}}));

@@ -5,7 +5,34 @@
 #include <QAction>
 #include <QMenu>
 #include <QScrollArea>
+#include <QStyledItemDelegate>
+#include <QPainter>
+#include <QApplication>
+#include <QTabWidget>
 #include <functional>
+
+namespace {
+class CommandDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override {
+        QStyleOptionViewItem row(option);
+        initStyleOption(&row, index);
+        const QString shortcut = index.data(Qt::UserRole + 1).toString();
+        const int shortcutWidth = row.fontMetrics.horizontalAdvance(shortcut);
+        row.text = row.fontMetrics.elidedText(row.text, Qt::ElideRight,
+                                             row.rect.width() - shortcutWidth - 40);
+        const auto *style = row.widget ? row.widget->style() : QApplication::style();
+        style->drawControl(QStyle::CE_ItemViewItem, &row, painter, row.widget);
+        painter->save();
+        painter->setFont(row.font);
+        painter->setPen(row.palette.color(QPalette::Text));
+        painter->setOpacity(0.65);
+        painter->drawText(row.rect.adjusted(12, 0, -12, 0), Qt::AlignRight | Qt::AlignVCenter, shortcut);
+        painter->restore();
+    }
+};
+}
 
 void MainWindow::updateEditActions() {
     undoBtn->setEnabled(timeline->canUndo());
@@ -20,11 +47,17 @@ void MainWindow::updateEditActions() {
 void MainWindow::resetPanelLayout() {
     viewMenu->actions()[0]->setChecked(true);
     viewMenu->actions()[1]->setChecked(true);
-    clipSidebar->show();
-    timelineTools->parentWidget()->parentWidget()->show();
-    if (editorSettings.sidebarPosition == "right") topPaneSplitter->setSizes({800, 200, 240});
-    else topPaneSplitter->setSizes({240, 800, 200});
-    mainSplitter->setSizes({600, 240});
+    setLibraryPageVisible(0, true);
+    setLibraryPageVisible(1, true);
+    libraryTabs->setCurrentIndex(0);
+    if (editorSettings.sidebarPosition == "right") topPaneSplitter->setSizes({1000, 260});
+    else topPaneSplitter->setSizes({260, 1000});
+    mainSplitter->setSizes({540, 280});
+}
+
+void MainWindow::setLibraryPageVisible(int index, bool visible) {
+    libraryTabs->setTabVisible(index, visible);
+    libraryTabs->setVisible(libraryTabs->isTabVisible(0) || libraryTabs->isTabVisible(1));
 }
 
 void MainWindow::showCommandPalette() {
@@ -73,6 +106,7 @@ void MainWindow::showCommandPalette() {
     search->setPlaceholderText("Search actions…");
     search->setAccessibleName("Search actions");
     auto *list = new QListWidget(&dialog);
+    list->setItemDelegate(new CommandDelegate(list));
     list->setObjectName("CommandList");
     list->setAccessibleName("Available actions");
     layout->addWidget(search);
@@ -88,8 +122,10 @@ void MainWindow::showCommandPalette() {
             bool match = true;
             for (const auto &word : words) match &= command.label.contains(word, Qt::CaseInsensitive);
             if (!match) continue;
-            auto *item = new QListWidgetItem(command.label + (command.key.isEmpty() ? "" : "    " + command.key), list);
+            auto *item = new QListWidgetItem(command.label, list);
             item->setData(Qt::UserRole, index);
+            item->setData(Qt::UserRole + 1, command.key);
+            item->setData(Qt::AccessibleDescriptionRole, command.key);
             if (!command.enabled) { item->setFlags(Qt::NoItemFlags); item->setToolTip("Open suitable media to use this action."); }
         }
         for (int row = 0; row < list->count(); ++row) {

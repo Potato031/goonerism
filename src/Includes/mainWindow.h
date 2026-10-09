@@ -40,6 +40,7 @@ class QComboBox;
 class QAction;
 class QProgressBar;
 class QVideoWidget;
+class QTabWidget;
 
 
 class MainWindow : public QMainWindow {
@@ -56,9 +57,9 @@ public:
         QString notificationPosition = "top-right";
         int updateCheckDelayMs = 2000;
         QString windowTitle = "Potato Studio";
-        QString logoPrimaryText = "POTATO";
-        QString logoSecondaryText = "STUDIO";
-        QString importButtonText = "Import Media";
+        QString logoPrimaryText = "Potato";
+        QString logoSecondaryText = "Studio";
+        QString importButtonText = "Import media";
         int sidebarWidth = 260;
         QString sidebarPosition = "left";
         QString toolButtonOrder = "text,blur,pixel,blackout,shape,colorcorrect,autocut,settings,resetcrop,speedramp";
@@ -66,32 +67,32 @@ public:
         float defaultCropBottom = 0.96f;
         float defaultCropLeft = 0.0f;
         float defaultCropRight = 1.0f;
-        QString previewPlaceholderTitle = "Start with a media file";
+        QString previewPlaceholderTitle = "Start a new edit";
         QString previewPlaceholderBody = "Drop video or audio here, or choose Import Media.";
         QString emptyTransportHint = "SPACE PLAY/PAUSE | S SPLIT | CTRL+C EXPORT";
         QString videoTransportHint = "SPACE PLAY/PAUSE | S SPLIT | CTRL+C EXPORT VIDEO";
         QString audioTransportHint = "SPACE PLAY/PAUSE | S SPLIT | CTRL+SHIFT+C EXPORT AUDIO";
-        QString timelineAccentColor = "#4A86A3";
-        QString timelineSecondaryColor = "#315F75";
-        QString timelineBackgroundColor = "#101214";
-        QString timelineTrackColor = "#252A2D";
-        QString timelineWaveformColor = "#9CB8C4";
-        QString previewAccentColor = "#D46252";
-        QString previewSecondaryColor = "#A9473B";
-        QString previewBackgroundColor = "#030303";
-        QString appBackgroundStartColor = "#0B0B0C";
-        QString appBackgroundEndColor = "#101011";
-        QString panelSurfaceColor = "#1B1B1D";
-        QString panelAltSurfaceColor = "#131315";
-        QString controlSurfaceColor = "#29292C";
-        QString controlHoverColor = "#39393D";
-        QString borderColor = "#55555C";
-        QString primaryTextColor = "#E0E0E2";
-        QString mutedTextColor = "#A1A1A7";
-        QString sectionLabelColor = "#C4C4C8";
-        QString logoPrimaryColor = "#E2E2E2";
-        QString logoSecondaryColor = "#A6A6A6";
-        QString appFontFamily = "Sans Serif";
+        QString timelineAccentColor = "#A78BE0";
+        QString timelineSecondaryColor = "#A78BE0";
+        QString timelineBackgroundColor = "#141419";
+        QString timelineTrackColor = "#24242D";
+        QString timelineWaveformColor = "#83BBA6";
+        QString previewAccentColor = "#A78BE0";
+        QString previewSecondaryColor = "#83BBA6";
+        QString previewBackgroundColor = "#09090C";
+        QString appBackgroundStartColor = "#121217";
+        QString appBackgroundEndColor = "#121217";
+        QString panelSurfaceColor = "#1B1B22";
+        QString panelAltSurfaceColor = "#17171D";
+        QString controlSurfaceColor = "#292932";
+        QString controlHoverColor = "#363640";
+        QString borderColor = "#494951";
+        QString primaryTextColor = "#EDECF2";
+        QString mutedTextColor = "#A6A4B2";
+        QString sectionLabelColor = "#C8C5D2";
+        QString logoPrimaryColor = "#EDECF2";
+        QString logoSecondaryColor = "#A78BE0";
+        QString appFontFamily = "Noto Sans";
         int appFontPointSize = 10;
         int logoFontPointSize = 13;
         int mediaBadgeFontPointSize = 9;
@@ -119,7 +120,7 @@ public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
     EditorSettings getEditorSettings() const { return editorSettings; }
-    const QString CURRENT_VERSION = "1.3.1";
+    const QString CURRENT_VERSION = "1.3.2";
     void downloadUpdate(const QString &url);
     void finalizeUpdate();
     void checkForUpdates();
@@ -152,9 +153,11 @@ private:
     void showShortcutsDialog();
     void showCommandPalette();
     void resetPanelLayout();
+    void setLibraryPageVisible(int index, bool visible);
     void updateEditActions();
     QLineEdit *mediaSearch;
-    QPushButton *commandBtn;
+    QTabWidget *libraryTabs = nullptr;
+    QPushButton *commandBtn = nullptr;
     QPushButton *viewBtn;
     QPushButton *emptyImportBtn;
     QWidget *emptyPreviewPanel;
@@ -172,7 +175,7 @@ private:
     // Multi-source playback: seek in timeline time, switching files as needed
     void seekTimeline(qint64 timelinePosMs);
     void updateTimelineChips();
-    QLineEdit* exportInput;
+    QLineEdit* exportInput = nullptr;
     QVBoxLayout* mainLayout;
     TitleBar* titleBar;
     QList<ResizeGrip*> resizeGrips;

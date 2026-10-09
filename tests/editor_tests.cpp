@@ -3,11 +3,15 @@
 #include <QProcess>
 #include <QTimer>
 #include <QComboBox>
+#include <QTabWidget>
 #include <QMenu>
 #include <QAction>
 #include <QVideoWidget>
 #include <QClipboard>
 #include <QMimeData>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include <QPaintEvent>
 #include "../src/Includes/mainWindow.h"
 #include "../src/Includes/appsettings.h"
@@ -183,12 +187,70 @@ private slots:
         qInfo() << "UI heartbeat during 4K playback: p95" << p95 << "ms; worst" << worst << "ms; samples" << gaps.size();
         QVERIFY2(p95 < 25 && worst < 100, "Video playback exceeds the UI responsiveness budget.");
     }
+    void appearanceUpgradePreservesCustomSettings_data() {
+        QTest::addColumn<int>("themeVersion");
+        QTest::newRow("original-dark-theme") << 4;
+        QTest::newRow("polished-dark-theme") << 5;
+        QTest::newRow("light-redesign") << 6;
+    }
+    void appearanceUpgradePreservesCustomSettings() {
+        QFETCH(int, themeVersion);
+        auto settings = makeAppSettings();
+        QMap<QString, QVariant> original;
+        for (const auto &key : settings.allKeys()) original.insert(key, settings.value(key));
+        settings.setValue("appearance/themeVersion", themeVersion);
+        settings.setValue("appearance/timelineAccentColor", themeVersion == 4 ? "#4A86A3" : themeVersion == 6 ? "#684890" : "#D46252");
+        settings.setValue("appearance/panelSurfaceColor", themeVersion == 6 ? "#FFFFFF" : "#1B1B1D");
+        settings.setValue("appearance/controlSurfaceColor", "#383027");
+        settings.setValue("appearance/appFontPointSize", 11);
+        settings.sync();
+        {
+            MainWindow window;
+            QCOMPARE(window.editorSettings.timelineAccentColor, MainWindow::EditorSettings().timelineAccentColor);
+            QCOMPARE(window.editorSettings.controlSurfaceColor, QString("#383027"));
+            QCOMPARE(window.editorSettings.panelSurfaceColor, MainWindow::EditorSettings().panelSurfaceColor);
+            QCOMPARE(window.editorSettings.appFontPointSize, 11);
+            window.saveEditorSettings();
+            QCOMPARE(settings.value("appearance/themeVersion").toInt(), 7);
+        }
+        settings.setValue("appearance/timelineAccentColor", "#92734A");
+        settings.sync();
+        {
+            MainWindow window;
+            QCOMPARE(window.editorSettings.timelineAccentColor, QString("#92734A"));
+            QCOMPARE(window.editorSettings.controlSurfaceColor, QString("#383027"));
+        }
+        settings.clear();
+        for (auto it = original.cbegin(); it != original.cend(); ++it) settings.setValue(it.key(), it.value());
+        settings.sync();
+    }
+    void previewFitsOriginalAspectAfterResizing() {
+        VideoWithCropWidget preview;
+        for (const QSize source : {QSize(1920, 1080), QSize(1080, 1920), QSize(2560, 1080)}) {
+            preview.setProperty("actualWidth", source.width());
+            preview.setProperty("actualHeight", source.height());
+            preview.lastFrame = QImage(137, 83, QImage::Format_RGB32);
+            for (const QSize viewport : {QSize(1000, 500), QSize(680, 180), QSize(450, 800)}) {
+                preview.resize(viewport);
+                const QRect fitted = preview.calculateTargetRect();
+                QVERIFY(preview.rect().contains(fitted));
+                QVERIFY(fitted.width() == viewport.width() || fitted.height() == viewport.height());
+                const double expectedHeight = double(fitted.width()) * source.height() / source.width();
+                QVERIFY(qAbs(fitted.height() - expectedHeight) <= 1.5);
+                QVERIFY(qAbs(fitted.center().x() - preview.rect().center().x()) <= 1);
+                QVERIFY(qAbs(fitted.center().y() - preview.rect().center().y()) <= 1);
+            }
+        }
+    }
     void emptyWorkspaceAndSmallLayout() {
         MainWindow window;
         window.resize(1280, 850);
         window.show();
         QTest::qWait(60);
         QVERIFY(window.currentMediaPath.isEmpty());
+        QCOMPARE(window.videoContainer->width(), window.workspace->width());
+        QCOMPARE(window.videoContainer->y(), 0);
+        QVERIFY(QColor(window.editorSettings.panelSurfaceColor).lightness() < 50);
         QVERIFY(window.emptyImportBtn->isVisible());
         QVERIFY(!window.exportBtn->isEnabled());
         QVERIFY(!window.undoBtn->isEnabled());
@@ -200,6 +262,9 @@ private slots:
         QCOMPARE(window.width(), 960);
         auto *body = window.emptyPreviewPanel->findChild<QLabel*>("EmptyPreviewBody");
         QVERIFY(body->geometry().bottom() < window.emptyImportBtn->geometry().top());
+        auto *shortcutHint = window.emptyPreviewPanel->findChild<QLabel*>("SubtleHint");
+        if (shortcutHint->isVisible())
+            QVERIFY(window.emptyImportBtn->geometry().bottom() < shortcutHint->geometry().top());
         QVERIFY(window.findChild<QScrollArea*>("ToolScroll"));
         window.grab().save(sandbox.filePath("compact.png"));
     }
@@ -217,6 +282,7 @@ private slots:
         QTest::qWait(30);
         QCOMPARE(window.width(), 960);
         window.resize(1280, 850);
+        QTest::qWait(30);
         QVERIFY(window.exportVideoAction->isEnabled());
         QVERIFY(!window.emptyImportBtn->isVisible());
         QCOMPARE(window.timeline->sources[0].hasAudio, true);
@@ -224,6 +290,10 @@ private slots:
         // waveform aligned to the three-second fixture within one AAC frame.
         QVERIFY(qAbs(window.timeline->audioSamples.size() * 10 - 3000) <= 30);
         window.grab().save(sandbox.filePath("loaded.png"));
+        window.libraryTabs->setCurrentIndex(1);
+        QTest::qWait(30);
+        window.grab().save(sandbox.filePath("effects.png"));
+        window.libraryTabs->setCurrentIndex(0);
         // Entering text must never invoke a playback shortcut.
         window.exportInput->setFocus();
         QTest::keyClicks(window.exportInput, "hello world");
@@ -314,14 +384,16 @@ private slots:
         TimelineWidget timeline;
         timeline.resize(600, 220);
         timeline.setDuration(3000);
-        QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(300, 10));
+        const int middleX = timeline.sidebarWidth + (timeline.width() - timeline.sidebarWidth) / 2;
+        QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(middleX, 10));
         QCOMPARE(timeline.currentPosMs, qint64(1500));
         timeline.setCurrentPosition(0);
         QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(599, 80));
-        QMouseEvent move(QEvent::MouseMove, QPointF(400, 80), QPointF(400, 80),
+        const int trimX = timeline.sidebarWidth + (timeline.width() - timeline.sidebarWidth) * 2 / 3;
+        QMouseEvent move(QEvent::MouseMove, QPointF(trimX, 80), QPointF(trimX, 80),
                          Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(&timeline, &move);
-        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(400, 80));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(trimX, 80));
         QCOMPARE(timeline.segments[0].endMs, qint64(2000));
         timeline.undo();
         QCOMPARE(timeline.segments[0].endMs, qint64(3000));
@@ -365,8 +437,38 @@ private slots:
         QVERIFY(window.clipSidebar->isHidden());
         QVERIFY(window.timelineTools->parentWidget()->parentWidget()->isHidden());
         window.resetPanelLayout();
+        QVERIFY(window.libraryTabs->isTabVisible(0));
+        QVERIFY(window.libraryTabs->isTabVisible(1));
         QVERIFY(!window.clipSidebar->isHidden());
+        window.libraryTabs->setCurrentIndex(1);
         QVERIFY(!window.timelineTools->parentWidget()->parentWidget()->isHidden());
+    }
+    void librarySelectionAndVisibilityPersist() {
+        auto settings = makeAppSettings();
+        QMap<QString, QVariant> original;
+        for (const auto &key : settings.allKeys()) original.insert(key, settings.value(key));
+        {
+            MainWindow window;
+            window.libraryTabs->setCurrentIndex(1);
+            window.close();
+        }
+        {
+            MainWindow restored;
+            QCOMPARE(restored.libraryTabs->currentIndex(), 1);
+            QVERIFY(restored.viewMenu->actions()[0]->isChecked());
+            QVERIFY(restored.viewMenu->actions()[1]->isChecked());
+            restored.viewMenu->actions()[0]->setChecked(false);
+            restored.close();
+        }
+        {
+            MainWindow restored;
+            QVERIFY(!restored.libraryTabs->isTabVisible(0));
+            QVERIFY(restored.libraryTabs->isTabVisible(1));
+            QCOMPARE(restored.libraryTabs->currentIndex(), 1);
+        }
+        settings.clear();
+        for (auto it = original.cbegin(); it != original.cend(); ++it) settings.setValue(it.key(), it.value());
+        settings.sync();
     }
     void commandSearchRunsChosenAction() {
         MainWindow window;
@@ -385,6 +487,137 @@ private slots:
         window.showCommandPalette();
         QVERIFY(found);
         QCOMPARE(window.timeline->getZoomFactor(), 1.0);
+    }
+    void videoExportPreservesEditsAndSize_data() {
+        QTest::addColumn<bool>("multipleSources");
+        QTest::addColumn<bool>("compress");
+        QTest::addColumn<bool>("muted");
+        QTest::addColumn<bool>("attainable");
+        QTest::newRow("trim-with-audio") << false << false << false << true;
+        QTest::newRow("reordered-sources") << true << false << false << true;
+        QTest::newRow("size-limited-retimed") << true << true << false << true;
+        QTest::newRow("size-limited-muted") << true << true << true << true;
+        QTest::newRow("unreachable-target-video") << false << true << false << false;
+        QTest::newRow("unreachable-target-muted") << false << true << true << false;
+    }
+    void videoExportPreservesEditsAndSize() {
+        QFETCH(bool, multipleSources);
+        QFETCH(bool, compress);
+        QFETCH(bool, muted);
+        QFETCH(bool, attainable);
+        MainWindow window;
+        window.loadClipDirectly(video);
+        QTRY_VERIFY_WITH_TIMEOUT(window.timeline->sourceHasAudio(), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.videoWithCrop->lastFrame.isNull(), 10000);
+        auto *timeline = window.timeline;
+        TimelineWidget::Segment first{1000, 1700};
+        TimelineWidget::Segment second{700, 1200};
+        if (multipleSources) {
+            auto source = timeline->sources.first();
+            source.offsetMs = 3000;
+            timeline->sources.append(source);
+            first.sourceIdx = 1;
+            first.startMs += 3000;
+            first.endMs += 3000;
+        }
+        if (compress) {
+            first.speedStart = first.speedEnd = 0.5f;
+            second.speedStart = second.speedEnd = 0.5f;
+        }
+        timeline->segments = {first, second};
+        if (multipleSources && !compress) {
+            TimelineWidget::OverlayClip blackout;
+            blackout.type = 2;
+            blackout.startMs = first.startMs + 100;
+            blackout.endMs = first.startMs + 400;
+            timeline->overlays = {blackout};
+        }
+        auto configuration = timeline->getExportSettings();
+        configuration.videoCompressionThresholdMB = compress ? 0 : 1000;
+        configuration.targetCompressedSizeMB = attainable ? 0.15 : 0.001;
+        timeline->setExportSettings(configuration);
+        makeAppSettings().setValue("export/exportDirectory", sandbox.filePath("exports"));
+        QApplication::clipboard()->setText("previous-export");
+        QSignalSpy started(timeline, &TimelineWidget::exportStarted);
+        QElapsedTimer clock;
+        clock.start();
+        QSignalSpy finished(timeline, &TimelineWidget::exportFinished);
+        if (muted) timeline->copyTrimmedVideoMuted();
+        else timeline->copyTrimmedVideo();
+        QTRY_VERIFY_WITH_TIMEOUT(!finished.isEmpty(), 15000);
+        if (!attainable) {
+            QVERIFY(!finished.first().first().toBool());
+            QVERIFY(finished.first().at(1).toString().contains("file size"));
+            QCOMPARE(QApplication::clipboard()->text(), QString("previous-export"));
+            QVERIFY(!timeline->isExporting);
+            QVERIFY(!window.exportBusy);
+            return;
+        }
+        QVERIFY2(finished.first().first().toBool(), qPrintable(finished.first().at(1).toString()));
+        const auto urls = QApplication::clipboard()->mimeData()->urls();
+        QVERIFY(!urls.isEmpty());
+        const QString output = urls.first().toLocalFile();
+        QProcess probe;
+        probe.start("ffprobe", {"-v", "error", "-show_entries", "stream=codec_type,width,height:format=duration", "-of", "json", output});
+        QVERIFY(probe.waitForFinished(5000));
+        QCOMPARE(probe.exitCode(), 0);
+        const auto metadata = QJsonDocument::fromJson(probe.readAllStandardOutput()).object();
+        const double duration = metadata["format"].toObject()["duration"].toString().toDouble();
+        QVERIFY(qAbs(duration - (compress ? 2.4 : 1.2)) < 0.12);
+        const auto streams = metadata["streams"].toArray();
+        QCOMPARE(streams.size(), muted ? 1 : 2);
+        QCOMPARE(streams.first().toObject()["width"].toInt(), 640);
+        QCOMPARE(streams.first().toObject()["height"].toInt(), 360);
+        if (multipleSources && !compress) {
+            QProcess extract;
+            extract.start("ffmpeg", {"-v", "error", "-ss", "0.2", "-i", output, "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"});
+            QVERIFY(extract.waitForFinished(5000));
+            QCOMPARE(extract.exitCode(), 0);
+            const QImage frame = QImage::fromData(extract.readAllStandardOutput());
+            QVERIFY(!frame.isNull());
+            QVERIFY(frame.pixelColor(320, 180).lightness() < 10);
+        }
+        qInfo() << "Export wall time" << clock.elapsed() << "ms; attempts" << started.size() << "; bytes" << QFileInfo(output).size();
+        if (compress) {
+            QVERIFY(QFileInfo(output).size() <= configuration.targetCompressedSizeMB * 1024 * 1024);
+            QVERIFY2(started.size() <= 2, "This size budget should fit without repeatedly re-encoding the clip.");
+        }
+        QVERIFY(!timeline->isExporting);
+        QVERIFY(!window.exportBusy);
+    }
+    void additionalFormatsExportReorderedSources_data() {
+        QTest::addColumn<bool>("gif");
+        QTest::newRow("gif") << true;
+        QTest::newRow("audio") << false;
+    }
+    void additionalFormatsExportReorderedSources() {
+        QFETCH(bool, gif);
+        MainWindow window;
+        window.loadClipDirectly(video);
+        QTRY_VERIFY_WITH_TIMEOUT(window.timeline->sourceHasAudio(), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.videoWithCrop->lastFrame.isNull(), 10000);
+        auto *timeline = window.timeline;
+        auto secondSource = timeline->sources.first();
+        secondSource.offsetMs = 3000;
+        timeline->sources.append(secondSource);
+        TimelineWidget::Segment first{4000, 4700};
+        first.sourceIdx = 1;
+        timeline->segments = {first, TimelineWidget::Segment{700, 1200}};
+        makeAppSettings().setValue("export/exportDirectory", sandbox.filePath("exports"));
+        QSignalSpy finished(timeline, &TimelineWidget::exportFinished);
+        if (gif) timeline->copyTrimmedGif();
+        else timeline->copyTrimmedAudio();
+        QTRY_VERIFY_WITH_TIMEOUT(!finished.isEmpty(), 15000);
+        QVERIFY2(finished.first().first().toBool(), qPrintable(finished.first().at(1).toString()));
+        const auto urls = QApplication::clipboard()->mimeData()->urls();
+        QVERIFY(!urls.isEmpty());
+        QProcess probe;
+        probe.start("ffprobe", {"-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", urls.first().toLocalFile()});
+        QVERIFY(probe.waitForFinished(5000));
+        QCOMPARE(probe.exitCode(), 0);
+        QVERIFY(qAbs(probe.readAllStandardOutput().trimmed().toDouble() - 1.2) < 0.15);
+        QVERIFY(!timeline->isExporting);
+        QVERIFY(!window.exportBusy);
     }
     void audioExportProducesPlayableFile() {
         MainWindow window;
@@ -477,7 +710,7 @@ private slots:
     }
     void cleanupTestCase() {
         // Keep visual artifacts outside the temporary fixture directory.
-        for (const QString &name : {"empty.png", "compact.png", "loaded.png", "commands.png"}) {
+        for (const QString &name : {"empty.png", "compact.png", "loaded.png", "effects.png", "commands.png"}) {
             QFile::remove("/tmp/potato-editor-" + name);
             QFile::copy(sandbox.filePath(name), "/tmp/potato-editor-" + name);
         }

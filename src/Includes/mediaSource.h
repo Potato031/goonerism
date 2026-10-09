@@ -279,11 +279,11 @@ public:
         // Any inset here causes a visible zoom jump when switching between the
         // native and composited preview paths at an overlay boundary.
         QRect bounds = rect();
-        int frameWidth = lastFrame.width();
-        int frameHeight = lastFrame.height();
+        int frameWidth = property("actualWidth").toInt();
+        int frameHeight = property("actualHeight").toInt();
         if (frameWidth <= 0 || frameHeight <= 0) {
-            frameWidth = property("actualWidth").toInt();
-            frameHeight = property("actualHeight").toInt();
+            frameWidth = lastFrame.width();
+            frameHeight = lastFrame.height();
         }
         if (frameWidth <= 0 || frameHeight <= 0) return bounds;
 
@@ -382,7 +382,10 @@ protected:
 
         // NOTE: frameToDraw already has blur/pixelate/blackout boxes baked in by the
         // background worker (see triggerScale/compositeFilters) so painting stays cheap.
-        if (drawEditorFrame) p.drawImage(imageRect, frameToDraw);
+        if (drawEditorFrame) {
+            p.fillRect(rect(), m_backgroundColor);
+            p.drawImage(imageRect, frameToDraw);
+        }
 
         // Playback shows the finished composition only. Editing chrome returns
         // immediately on pause, matching the behavior of full NLE viewers.
@@ -417,8 +420,7 @@ protected:
         int h = (B - T) * tr.height();
 
         p.setOpacity(isActive ? 1.0 : 0.3);
-        // If active, use a thicker line (3px) so the user knows it's selected for deletion
-        p.setPen(QPen(color, isActive ? 3 : 1, isActive ? Qt::SolidLine : Qt::DashLine));
+        p.setPen(QPen(color, isActive ? 1.5 : 1, isActive ? Qt::SolidLine : Qt::DashLine));
         p.setBrush(Qt::NoBrush);
 
         p.drawRect(x, y, w, h);

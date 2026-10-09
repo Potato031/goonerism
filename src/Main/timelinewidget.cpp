@@ -525,11 +525,29 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
     const int vTop = videoTrackTop() + 8;
     const int aTop = vTop + trackHeight + 15;
 
+    const bool lightCanvas = bg.lightness() > 128;
+    const QColor labelColor = lightCanvas ? QColor("#6F677B") : QColor("#A1A1A7");
+    const QColor ruleColor = lightCanvas ? QColor("#D7D2DF") : QColor("#39343F");
+    painter.fillRect(QRect(0, rulerHeight, sidebarWidth, height() - rulerHeight), m_trackColor);
+    painter.setPen(ruleColor);
+    painter.drawLine(sidebarWidth - 1, rulerHeight, sidebarWidth - 1, height());
+    painter.setPen(labelColor);
+    QFont laneFont = painter.font();
+    laneFont.setPixelSize(11);
+    laneFont.setWeight(QFont::Medium);
+    painter.setFont(laneFont);
+    painter.drawText(QRect(12, vTop, sidebarWidth - 20, trackHeight), Qt::AlignVCenter, "Video");
+    if (!audioSamples.empty() || durationMs <= 0)
+        painter.drawText(QRect(12, aTop, sidebarWidth - 20, trackHeight), Qt::AlignVCenter, "Audio");
+
     // Safety check: if no duration, don't draw clips
     if (durationMs <= 0 || segments.isEmpty()) {
-        painter.setPen(QColor("#A1A1A7"));
-        painter.drawText(rect().adjusted(24, 0, -24, 0), Qt::AlignCenter,
-                         "Drop media here to build your timeline");
+        for (int y : {vTop, aTop}) {
+            painter.fillRect(QRect(sidebarWidth + 8, y, qMax(0, viewWidth - 16), trackHeight), m_trackColor);
+        }
+        painter.setPen(labelColor);
+        painter.drawText(QRect(sidebarWidth, vTop, viewWidth, trackHeight), Qt::AlignCenter,
+                         "Drop clips here to build your timeline");
         return;
     }
 
@@ -620,12 +638,12 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
         const qint64 rulerStartMs = qMax(0, visibleLeft - 100) / pxPerMs;
         for (qint64 t = (rulerStartMs / interval) * interval; t <= visibleEndMs; t += interval) {
             const int x = static_cast<int>(t * pxPerMs);
-            painter.setPen(QPen(QColor(255, 255, 255, 55), 1));
+            painter.setPen(QPen(ruleColor, 1));
             painter.drawLine(x, rulerHeight - 8, x, rulerHeight);
-            painter.setPen(QColor(255, 255, 255, 115));
+            painter.setPen(labelColor);
             painter.drawText(QRect(x + 4, 1, 100, rulerHeight - 2), Qt::AlignLeft | Qt::AlignVCenter, formatTimelineDuration(t));
         }
-        painter.setPen(QPen(QColor(255, 255, 255, 30), 1));
+        painter.setPen(QPen(ruleColor, 1));
         painter.drawLine(0, rulerHeight, contentWidth, rulerHeight);
     }
 
@@ -659,7 +677,7 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
         if (!thumbnailCache.isEmpty() && segments[i].sourceIdx == 0) {
             painter.save();
             painter.setClipRect(clipRect.adjusted(2, 2, -2, -2));
-            painter.setOpacity(isSel ? 0.62 : 0.42);
+            painter.setOpacity(isSel ? 0.42 : 0.28);
             const int thumbW = 88;
             for (int x = static_cast<int>(clipRect.left()) + 4 + qMax(0, (visibleLeft - static_cast<int>(clipRect.left()) - 4) / thumbW) * thumbW; x < qMin(clipRect.right(), double(visibleRight)); x += thumbW) {
                 const qint64 timeAtX = qBound<qint64>(segments[i].startMs,
@@ -688,7 +706,7 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
                 const int frameW = qMax(1, strip.width() / cachedFrames);
                 painter.save();
                 painter.setClipRect(clipRect.adjusted(2, 2, -2, -2));
-                painter.setOpacity(isSel ? 0.62 : 0.42);
+                painter.setOpacity(isSel ? 0.42 : 0.28);
                 const int thumbW = 88;
                 for (int x = static_cast<int>(clipRect.left()) + 4 + qMax(0, (visibleLeft - static_cast<int>(clipRect.left()) - 4) / thumbW) * thumbW; x < qMin(clipRect.right(), double(visibleRight)); x += thumbW) {
                     const qint64 timeAtX = qBound<qint64>(segments[i].startMs,
@@ -706,9 +724,11 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
             srcFont.setPointSizeF(8);
             srcFont.setBold(true);
             painter.setFont(srcFont);
-            painter.setPen(QColor(255, 255, 255, 190));
+            painter.setPen(lightCanvas ? QColor("#302B39") : QColor("#E0DCE6"));
             const QString name = QFileInfo(sources[segments[i].sourceIdx].path).fileName();
-            painter.drawText(clipRect.adjusted(10, 0, -10, 0), Qt::AlignVCenter | Qt::AlignLeft,
+            painter.fillRect(clipRect.adjusted(2, 2, -2, -trackHeight + 20),
+                             lightCanvas ? QColor(247, 246, 250, 225) : QColor(25, 22, 30, 190));
+            painter.drawText(clipRect.adjusted(10, 2, -10, -trackHeight + 22), Qt::AlignVCenter | Qt::AlignLeft,
                              painter.fontMetrics().elidedText(name, Qt::ElideMiddle, static_cast<int>(clipRect.width()) - 20));
             painter.restore();
         }
@@ -718,13 +738,13 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
             painter.save();
             painter.setPen(Qt::NoPen);
             painter.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 95));
-            painter.drawRoundedRect(QRectF(clipRect.left() + 6, clipRect.top() + 6, 36, 14), 4, 4);
+            painter.drawRoundedRect(QRectF(clipRect.left() + 6, clipRect.bottom() - 20, 36, 14), 3, 3);
             QFont fxFont = painter.font();
             fxFont.setPointSizeF(7);
             fxFont.setBold(true);
             painter.setFont(fxFont);
-            painter.setPen(Qt::white);
-            painter.drawText(QRectF(clipRect.left() + 6, clipRect.top() + 5, 36, 15), Qt::AlignCenter, "CROP");
+            painter.setPen(lightCanvas ? QColor("#302B39") : QColor("#E0DCE6"));
+            painter.drawText(QRectF(clipRect.left() + 6, clipRect.bottom() - 21, 36, 15), Qt::AlignCenter, "Crop");
             painter.restore();
         }
 
@@ -741,7 +761,7 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
 
         // Waveforms using segment-specific gain
         if (!audioSamples.empty()) {
-            QColor currentWaveColor = isSel ? accent : accent.darker(180);
+            QColor currentWaveColor = isSel ? m_waveformColor : m_waveformColor.darker(140);
             painter.setPen(QPen(currentWaveColor, 1));
 
             const int left = qMax(visibleLeft, qRound(clipRect.left()));

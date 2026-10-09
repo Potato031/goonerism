@@ -2,6 +2,8 @@
 
 A desktop video and audio editor built with Qt 6 and ffmpeg. Import media, trim and split clips, add timed effects, clean up silence, and export video, audio, or GIFs.
 
+The dark workspace pairs charcoal surfaces with soft violet controls. The edge-to-edge preview fills the center above its transport controls and preserves the original video aspect ratio, with letterboxing only where necessary. Media and Effects share a tabbed library beside the preview; the timeline has labeled video and audio tracks. The active library tab and panel visibility persist between sessions.
+
 Build with CMake 3.16+, a C++17 compiler, and Qt 6 Widgets, Multimedia, MultimediaWidgets, and Concurrent. Put `ffmpeg` and `ffprobe` on PATH (on Windows, alongside the executable).
 
 ```sh
@@ -10,12 +12,12 @@ cmake --build build --parallel
 ./build/PotatoEditor
 ```
 
-Pushes to `main` and manual runs of **CI Build and AppImage** build and test the Linux app, then upload `potatoeditor.AppImage` in the `PotatoEditor-linux-x86_64` Actions artifact. Version tags (`v*`) attach the same AppImage to a GitHub release. The package includes Qt, `ffmpeg`, and `ffprobe`.
+Pushes to `main` and manual runs of **CI Build and AppImage** build and test the Linux app, then upload `potatoeditor.appimage` in the `PotatoEditor-linux-x86_64` Actions artifact. Version tags (`v*`) attach the same AppImage to a GitHub release. The package includes Qt, `ffmpeg`, and `ffprobe`.
 
 - **Ctrl+O** imports media. The app opens the newest video from your configured folders and recent files; autoplay follows Settings. Disable “Open the newest video on startup” in Settings to start with an empty workspace.
 - **Ctrl+K** searches actions. Use Up/Down and Enter to run one.
 - Search the media panel by filename. Recent imports and panel sizes persist between sessions.
-- **View** shows or hides the media and effects panels, or resets their layout. Drag the dividers to resize panels; effects scroll in smaller windows.
+- **View** shows or hides the Media and Effects tabs, or resets the library and timeline layout. Drag the dividers to resize panels; effects scroll in smaller windows.
 - Drop files onto the timeline to append video or audio. Opening a file from the media panel replaces the current timeline.
 - **Ctrl+wheel** zooms at the pointer. Wheel pans a zoomed timeline; **Fit** restores the full view.
 - Use the **?** button for editing shortcuts and Settings to customize them.
@@ -50,3 +52,5 @@ To measure UI timer delays against a local recording on the desktop:
 ```sh
 QT_QPA_PLATFORM=xcb POTATO_EDITOR_PROFILE_MEDIA=/path/to/recording.mp4 ./build/EditorTests profileInteractivePlayback -nocrashhandler
 ```
+
+Export seeks independently within each source, avoiding decoding unused footage before the selected clips. Compression budgets account for speed changes; muted exports use the correct bitrate units. See [export measurements](docs/export-performance.md) for the 4.2× multi-source benchmark, quality checks, and reproduction commands.
