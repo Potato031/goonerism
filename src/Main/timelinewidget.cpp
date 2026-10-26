@@ -506,12 +506,21 @@ void TimelineWidget::validatePlayheadPosition() {
     }
 }
 
+float TimelineWidget::waveformPeakAtColumn(int x, double pxPerMs) {
+    const int column = x - scrollOffset;
+    if (column >= 0 && column < waveformColumns.size() && waveformColumns[column] >= 0)
+        return waveformColumns[column];
+    const int start = qMax(0, int(x / pxPerMs / 10));
+    const int end = qMin(int(audioSamples.size()), qMax(start + 1, int((x + 1) / pxPerMs / 10)));
+    float peak = 0;
+    for (int sample = start; sample < end; ++sample) peak = qMax(peak, audioSamples[sample]);
+    if (column >= 0 && column < waveformColumns.size()) waveformColumns[column] = peak;
+    return peak;
+}
+
 void TimelineWidget::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-
-    // Get Device Pixel Ratio for Windows High DPI Scaling
-    double dpr = this->devicePixelRatioF();
 
     QColor accent = m_accentColor;
     QColor secondary = m_secondaryColor;
@@ -522,6 +531,15 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
 
     int viewWidth = width() - sidebarWidth;
     int contentWidth = viewWidth * zoomFactor;
+    if (waveformColumns.size() != viewWidth + 4 || waveformColumnDuration != durationMs ||
+        waveformColumnContentWidth != contentWidth || waveformColumnScroll != scrollOffset ||
+        waveformColumnSampleCount != audioSamples.size()) {
+        waveformColumns.fill(-1.0f, qMax(0, viewWidth + 4));
+        waveformColumnDuration = durationMs;
+        waveformColumnContentWidth = contentWidth;
+        waveformColumnScroll = scrollOffset;
+        waveformColumnSampleCount = audioSamples.size();
+    }
     const int vTop = videoTrackTop() + 8;
     const int aTop = vTop + trackHeight + 15;
 
@@ -543,7 +561,12 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
     // Safety check: if no duration, don't draw clips
     if (durationMs <= 0 || segments.isEmpty()) {
         for (int y : {vTop, aTop}) {
-            painter.fillRect(QRect(sidebarWidth + 8, y, qMax(0, viewWidth - 16), trackHeight), m_trackColor);
+            const QRectF lane(sidebarWidth + 8, y, qMax(0, viewWidth - 16), trackHeight);
+            QColor laneFill = m_trackColor;
+            laneFill.setAlpha(100);
+            painter.setBrush(laneFill);
+            painter.setPen(QPen(ruleColor, 1, Qt::DashLine));
+            painter.drawRoundedRect(lane.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5);
         }
         painter.setPen(labelColor);
         painter.drawText(QRect(sidebarWidth, vTop, viewWidth, trackHeight), Qt::AlignCenter,
@@ -677,7 +700,7 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
         if (!thumbnailCache.isEmpty() && segments[i].sourceIdx == 0) {
             painter.save();
             painter.setClipRect(clipRect.adjusted(2, 2, -2, -2));
-            painter.setOpacity(isSel ? 0.42 : 0.28);
+            painter.setOpacity(isSel ? 0.70 : 0.48);
             const int thumbW = 88;
             for (int x = static_cast<int>(clipRect.left()) + 4 + qMax(0, (visibleLeft - static_cast<int>(clipRect.left()) - 4) / thumbW) * thumbW; x < qMin(clipRect.right(), double(visibleRight)); x += thumbW) {
                 const qint64 timeAtX = qBound<qint64>(segments[i].startMs,
@@ -706,7 +729,7 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
                 const int frameW = qMax(1, strip.width() / cachedFrames);
                 painter.save();
                 painter.setClipRect(clipRect.adjusted(2, 2, -2, -2));
-                painter.setOpacity(isSel ? 0.42 : 0.28);
+                painter.setOpacity(isSel ? 0.70 : 0.48);
                 const int thumbW = 88;
                 for (int x = static_cast<int>(clipRect.left()) + 4 + qMax(0, (visibleLeft - static_cast<int>(clipRect.left()) - 4) / thumbW) * thumbW; x < qMin(clipRect.right(), double(visibleRight)); x += thumbW) {
                     const qint64 timeAtX = qBound<qint64>(segments[i].startMs,
@@ -759,24 +782,40 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
             painter.restore();
         }
 
+        if (isSel && clipRect.width() >= 24) {
+            painter.save();
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(accent.lighter(125));
+            for (double handleX : {clipRect.left() + 3, clipRect.right() - 6})
+                painter.drawRoundedRect(QRectF(handleX, vTop + trackHeight / 2 - 9, 3, 18), 1.5, 1.5);
+            painter.restore();
+        }
+
         // Waveforms using segment-specific gain
         if (!audioSamples.empty()) {
+            QColor audioFill = m_waveformColor;
+            audioFill.setAlpha(isSel ? 24 : 12);
+            painter.setBrush(audioFill);
+            QColor audioBorder = isSel ? m_waveformColor : ruleColor;
+            audioBorder.setAlpha(isSel ? 120 : 80);
+            painter.setPen(QPen(audioBorder, 1));
+            painter.drawRoundedRect(QRectF(clipRect.left(), aTop, clipRect.width(), trackHeight), 4, 4);
             QColor currentWaveColor = isSel ? m_waveformColor : m_waveformColor.darker(140);
             painter.setPen(QPen(currentWaveColor, 1));
 
             const int left = qMax(visibleLeft, qRound(clipRect.left()));
             const int right = qMin(visibleRight, qRound(clipRect.right()));
+            QVector<QLine> waveformLines;
+            waveformLines.reserve(qMax(0, right - left));
             // Sample density is fixed at 100 Hz, independent of which async
             // source has finished. Silent gaps retain their timeline position.
             for (int x = left; x < right; ++x) {
-                const int start = qMax(0, int(x / pxPerMs / 10));
-                const int end = qMin(int(audioSamples.size()), qMax(start + 1, int((x + 1) / pxPerMs / 10)));
-                float peak = 0;
-                for (int sample = start; sample < end; ++sample) peak = qMax(peak, audioSamples[sample]);
+                const float peak = waveformPeakAtColumn(x, pxPerMs);
                 const float norm = segments[i].muted ? 0 : peak / maxAmplitude * segments[i].gain;
                 const int h = qMin(float(trackHeight), norm * (trackHeight - 10));
-                painter.drawLine(x, aTop + trackHeight / 2 - h / 2, x, aTop + trackHeight / 2 + h / 2);
+                waveformLines.append(QLine(x, aTop + trackHeight / 2 - h / 2, x, aTop + trackHeight / 2 + h / 2));
             }
+            painter.drawLines(waveformLines);
         }
     }
 

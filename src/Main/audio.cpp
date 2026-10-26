@@ -61,6 +61,7 @@ void TimelineWidget::loadAudioWaveform(const QString &path, qint64 offsetMs, int
             const int start = offsetMs / 10;
             if (audioSamples.size() < start + result.samples.size()) audioSamples.resize(start + result.samples.size());
             std::copy(result.samples.cbegin(), result.samples.cend(), audioSamples.begin() + start);
+            invalidateWaveformColumns();
             maxAmplitude = qMax(maxAmplitude, result.peak);
             update();
         });
@@ -302,6 +303,7 @@ void TimelineWidget::detectAudioTracks(const QString &path) {
             loadAudioFast(path);
         } else {
             audioSamples.clear();
+            invalidateWaveformColumns();
             update();
             emit mediaProbingFinished();
         }

@@ -72,6 +72,44 @@ private slots:
         settings.remove("media/recentFiles");
         settings.sync();
     }
+    void mediaBinDiscoversNestedAndNewRecordings() {
+        QTemporaryDir recordings;
+        QVERIFY(recordings.isValid());
+        QVERIFY(QDir().mkpath(recordings.filePath("game/session")));
+        for (int i = 0; i < 35; ++i) {
+            QFile clip(recordings.filePath(QString("game/session/clip%1.mp4").arg(i)));
+            QVERIFY(clip.open(QIODevice::WriteOnly));
+            clip.close();
+        }
+        auto settings = makeAppSettings();
+        settings.setValue("ui/autoLoadDirectories", QStringList{recordings.path()});
+        settings.setValue("ui/recentMediaLimit", 30);
+        settings.remove("media/recentFiles");
+        settings.sync();
+        {
+            MainWindow window;
+            QCOMPARE(window.collectRecentMediaFiles().size(), 30);
+            QCOMPARE(window.sidebarCountLabel->text(), QString("30 clips"));
+            const QString newest = recordings.filePath("game/session/newest.mp4");
+            QFile clip(newest);
+            QVERIFY(clip.open(QIODevice::WriteOnly));
+            QVERIFY(clip.setFileTime(QDateTime::currentDateTime().addSecs(60), QFileDevice::FileModificationTime));
+            clip.close();
+            QTRY_COMPARE_WITH_TIMEOUT(window.cachedRecentFiles.value(0), newest, 6000);
+            QCOMPARE(window.cachedRecentFiles.size(), 30);
+            QVERIFY(window.currentMediaPath.isEmpty());
+            QVERIFY(QFile::remove(newest));
+            QTRY_VERIFY_WITH_TIMEOUT(!window.cachedRecentFiles.contains(newest), 6000);
+            QCOMPARE(window.cachedRecentFiles.size(), 30);
+            window.editorSettings.recentMediaLimit = 32;
+            window.applyEditorSettings();
+            QCOMPARE(window.collectRecentMediaFiles().size(), 32);
+        }
+        settings.remove("ui/autoLoadDirectories");
+        settings.remove("ui/recentMediaLimit");
+        settings.remove("media/recentFiles");
+        settings.sync();
+    }
     void nativePlaybackDoesNotRepaintEditingLayer() {
         struct PaintCounter : QObject {
             int count = 0;
@@ -151,6 +189,70 @@ private slots:
         timeline.render(&incremental, dirty.boundingRect().topLeft(), dirty);
         const QImage full = timeline.grab().toImage();
         QCOMPARE(incremental, full);
+    }
+    void waveformCacheSurvivesViewportAndEditChanges() {
+        TimelineWidget timeline;
+        timeline.resize(1600, 240);
+        timeline.durationMs = 7200000;
+        timeline.segments.append({0, timeline.durationMs});
+        timeline.audioSamples.resize(720000);
+        quint32 random = 42;
+        for (float &sample : timeline.audioSamples) {
+            random = random * 1664525u + 1013904223u;
+            sample = float(random % 10000) / 10000;
+        }
+        timeline.maxAmplitude = 1;
+        for (int step = 0; step < 8; ++step) {
+            if (step == 1) timeline.segments[0].gain = 0.5f;
+            if (step == 2) timeline.segments[0].startMs = 123456;
+            if (step == 3) timeline.setZoomFactor(4);
+            if (step == 4) timeline.scrollOffset = 713;
+            if (step == 5) timeline.resize(1100, 240);
+            if (step == 6) timeline.durationMs += 10000;
+            if (step == 7) timeline.segments[0].muted = true;
+            QImage cached(timeline.size(), QImage::Format_ARGB32_Premultiplied);
+            timeline.render(&cached);
+            timeline.invalidateWaveformColumns();
+            QImage fresh(timeline.size(), QImage::Format_ARGB32_Premultiplied);
+            timeline.render(&fresh);
+            QCOMPARE(cached, fresh);
+            const double pxPerMs = double(int((timeline.width() - timeline.sidebarWidth) * timeline.zoomFactor)) / timeline.durationMs;
+            for (int x = timeline.scrollOffset; x < timeline.scrollOffset + timeline.width() - timeline.sidebarWidth; ++x) {
+                const int start = qMax(0, int(x / pxPerMs / 10));
+                const int end = qMin(int(timeline.audioSamples.size()), qMax(start + 1, int((x + 1) / pxPerMs / 10)));
+                float expected = 0;
+                for (int sample = start; sample < end; ++sample) expected = qMax(expected, timeline.audioSamples[sample]);
+                QCOMPARE(timeline.waveformPeakAtColumn(x, pxPerMs), expected);
+            }
+        }
+    }
+    void benchmarkWaveformRendering() {
+        if (!qEnvironmentVariableIsSet("POTATO_EDITOR_BENCHMARK"))
+            QSKIP("Set POTATO_EDITOR_BENCHMARK=1 for the bounded rendering benchmark.");
+        for (int hours : {2, 24}) {
+            TimelineWidget timeline;
+            timeline.resize(1600, 240);
+            timeline.durationMs = qint64(hours) * 3600000;
+            timeline.segments.append({0, timeline.durationMs});
+            timeline.audioSamples.resize(timeline.durationMs / 10);
+            quint32 random = 42;
+            for (float &sample : timeline.audioSamples) {
+                random = random * 1664525u + 1013904223u;
+                sample = float(random % 10000) / 10000;
+            }
+            timeline.maxAmplitude = 1;
+            QImage target(timeline.size(), QImage::Format_ARGB32_Premultiplied);
+            timeline.render(&target);
+            QElapsedTimer clock;
+            clock.start();
+            for (int i = 0; i < 120; ++i) {
+                timeline.currentPosMs = qint64(i) * timeline.durationMs / 120;
+                timeline.render(&target);
+            }
+            qInfo() << hours << "hour waveform, 120 full renders:" << clock.nsecsElapsed() / 1000000.0 << "ms";
+            const QString artifact = qEnvironmentVariable("POTATO_EDITOR_BENCHMARK_ARTIFACT");
+            if (!artifact.isEmpty()) target.save(artifact + QString::number(hours) + ".png");
+        }
     }
     void profileInteractivePlayback() {
         const QString path = qEnvironmentVariable("POTATO_EDITOR_PROFILE_MEDIA");
@@ -248,6 +350,8 @@ private slots:
         window.show();
         QTest::qWait(60);
         QVERIFY(window.currentMediaPath.isEmpty());
+        QVERIFY(!window.nativeVideoWidget->isVisible());
+        QVERIFY(window.emptyPreviewPanel->isVisible());
         QCOMPARE(window.videoContainer->width(), window.workspace->width());
         QCOMPARE(window.videoContainer->y(), 0);
         QVERIFY(QColor(window.editorSettings.panelSurfaceColor).lightness() < 50);

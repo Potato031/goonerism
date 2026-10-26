@@ -19,6 +19,7 @@ void TimelineWidget::resetMediaState() {
 
     thumbnailCache.clear();
     audioSamples.clear();
+    invalidateWaveformColumns();
     undoStack.clear();
     redoStack.clear();
 

@@ -54,3 +54,5 @@ QT_QPA_PLATFORM=xcb POTATO_EDITOR_PROFILE_MEDIA=/path/to/recording.mp4 ./build/E
 ```
 
 Export seeks independently within each source, avoiding decoding unused footage before the selected clips. Compression budgets account for speed changes; muted exports use the correct bitrate units. See [export measurements](docs/export-performance.md) for the 4.2× multi-source benchmark, quality checks, and reproduction commands.
+
+Timeline waveform peaks are cached by viewport and drawn in batches. The latest measured two-hour and 24-hour full-redraw improvements, interface changes, screenshots, verification scope, and reproduction commands are in [responsiveness and polish](docs/responsiveness-and-polish.md).

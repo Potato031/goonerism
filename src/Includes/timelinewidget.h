@@ -296,6 +296,14 @@ private:
     QQueue<int> thumbnailRequestQueue;
     bool thumbnailRequestActive = false;
     QVector<float> audioSamples;
+    // Peaks depend on source data and viewport geometry, never clip gain or selection.
+    QVector<float> waveformColumns;
+    qint64 waveformColumnDuration = -1;
+    int waveformColumnContentWidth = -1;
+    int waveformColumnScroll = -1;
+    qsizetype waveformColumnSampleCount = -1;
+    void invalidateWaveformColumns() { waveformColumns.clear(); }
+    float waveformPeakAtColumn(int x, double pxPerMs);
     quint64 mediaGeneration = 0;
     quint64 waveformGeneration = 0;
     quint64 editRevision = 0;

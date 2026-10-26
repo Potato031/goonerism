@@ -70,8 +70,14 @@ QList<QFileInfo> discoverMediaFiles(const QStringList &roots, const QStringList 
     for (const auto &extension : MediaUtils::knownVideoExtensions() + MediaUtils::knownAudioExtensions())
         filters.append("*." + extension);
     QList<QFileInfo> candidates;
-    for (const auto &root : roots)
-        if (!root.isEmpty()) candidates.append(QDir(root).entryInfoList(filters, QDir::Files));
+    for (const auto &root : roots) {
+        if (root.isEmpty()) continue;
+        QDirIterator entries(root, filters, QDir::Files, QDirIterator::Subdirectories);
+        while (entries.hasNext()) {
+            entries.next();
+            candidates.append(entries.fileInfo());
+        }
+    }
     for (const auto &path : remembered) {
         QFileInfo file(path);
         if (file.exists() && file.isFile()) candidates.append(file);
@@ -139,6 +145,42 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     qApp->installEventFilter(this);
     setupConnections();
     loadInitialVideo();
+
+    // Discover recordings made while the editor is open without blocking playback.
+    auto *mediaRefreshTimer = new QTimer(this);
+    mediaRefreshTimer->setInterval(2000);
+    auto *mediaScan = new QFutureWatcher<QStringList>(this);
+    connect(mediaScan, &QFutureWatcher<QStringList>::finished, this, [this, mediaScan]() {
+        // Settings or imports may have changed while this scan was running.
+        if (mediaScan->property("directories").toStringList() != editorSettings.autoLoadDirectories ||
+            mediaScan->property("limit").toInt() != editorSettings.recentMediaLimit ||
+            mediaScan->property("cache").toStringList() != cachedRecentFiles) return;
+        const auto files = mediaScan->result();
+        if (files == cachedRecentFiles) return;
+        cachedRecentFiles = files;
+        recentFilesScanned = true;
+        updateSidebar();
+    });
+    connect(mediaRefreshTimer, &QTimer::timeout, this, [this, mediaScan]() {
+        if (mediaScan->isRunning()) return;
+        QStringList roots = editorSettings.autoLoadDirectories;
+        roots.prepend(QStandardPaths::writableLocation(QStandardPaths::MoviesLocation));
+        QStringList remembered = cachedRecentFiles;
+        remembered.append(makeAppSettings().value("media/recentFiles").toStringList());
+        const int limit = qMax(1, editorSettings.recentMediaLimit);
+        mediaScan->setProperty("directories", editorSettings.autoLoadDirectories);
+        mediaScan->setProperty("limit", editorSettings.recentMediaLimit);
+        mediaScan->setProperty("cache", cachedRecentFiles);
+        mediaScan->setFuture(QtConcurrent::run([roots, remembered, limit]() {
+            QStringList files;
+            for (const auto &file : discoverMediaFiles(roots, remembered)) {
+                files.append(file.absoluteFilePath());
+                if (files.size() >= limit) break;
+            }
+            return files;
+        }));
+    });
+    mediaRefreshTimer->start();
 }
 
 MainWindow::~MainWindow() {
@@ -286,6 +328,7 @@ void MainWindow::setupUi() {
     player->setAudioOutput(audio);
     player->setVideoOutput(nativeVideoWidget);
     videoWithCrop->attachVideoSink(nativeVideoWidget->videoSink());
+    handlePlaybackState(player->playbackState());
     audio->setVolume(0.8);
     
     playPauseShortcut = nullptr;
@@ -442,14 +485,14 @@ void MainWindow::setupToolbar() {
 
     helpBtn = new QPushButton();
     helpBtn->setProperty("class", "IconBtn");
-    helpBtn->setFixedSize(32, 32);
+    helpBtn->setFixedSize(36, 36);
     helpBtn->setToolTip("Keyboard shortcuts");
     helpBtn->setCursor(Qt::PointingHandCursor);
     toolbarLayout->addWidget(helpBtn);
 
     settingsBtn = new QPushButton();
     settingsBtn->setProperty("class", "IconBtn");
-    settingsBtn->setFixedSize(32, 32);
+    settingsBtn->setFixedSize(36, 36);
     settingsBtn->setToolTip("Settings");
     settingsBtn->setCursor(Qt::PointingHandCursor);
     toolbarLayout->addWidget(settingsBtn);
@@ -495,7 +538,7 @@ void MainWindow::setupSidebar() {
     previewHeaderLayout->addStretch();
     sidebarImportBtn = new QPushButton();
     sidebarImportBtn->setProperty("class", "IconBtn");
-    sidebarImportBtn->setFixedSize(32, 32);
+    sidebarImportBtn->setFixedSize(36, 36);
     sidebarImportBtn->setToolTip("Import media");
     sidebarImportBtn->setCursor(Qt::PointingHandCursor);
     previewHeaderLayout->addWidget(sidebarImportBtn);
@@ -549,6 +592,7 @@ void MainWindow::setupWorkspace() {
     nativeVideoWidget = new QVideoWidget(videoContainer);
     nativeVideoWidget->setAspectRatioMode(Qt::KeepAspectRatio);
     nativeVideoWidget->setAcceptDrops(true);
+    nativeVideoWidget->hide();
     videoWithCrop = new VideoWithCropWidget(videoContainer);
     videoInternalLayout->addWidget(nativeVideoWidget);
     videoInternalLayout->addWidget(videoWithCrop);
@@ -1697,7 +1741,7 @@ QFrame#clipSidebar { background: @sidebarSurface; border: none; }
 QWidget#timelineTools { background: @inspectorSurface; border: none; }
 QFrame#TimelineShell { background: @timelineBg; border-top: 1px solid @frameBorder; }
 QFrame#workspace { background: @bgEnd; }
-QFrame#TransportBar { background: transparent; border: none; }
+QFrame#TransportBar { background: @transportSurface; border: none; border-top: 1px solid @subtleBorder; }
 QFrame#VideoContainer { background: @previewBg; border: none; border-radius: 0; }
 VideoWithCropWidget#VideoSurface { background-color: @previewBg; }
 
@@ -1714,7 +1758,7 @@ QDialog QLabel { color: @text; }
 QFormLayout QLabel { color: @muted; }
 
 QLabel#TimecodeLabel {
-    background: transparent;
+    background: @panelAlt;
     border: none;
     border-radius: @btnRadiuspx;
     color: @text;
@@ -1749,6 +1793,9 @@ QPushButton[class="IconBtn"] { background: transparent; border: 1px solid transp
 QPushButton[class="IconBtn"]:hover { background: @controlHover; border-color: @subtleBorder; }
 QPushButton[class="IconBtn"]:pressed { background: @control; border-color: @accentGlow; }
 QPushButton[class="IconBtn"]:checked { background: @chipBg; border-color: @accentSoft; }
+QPushButton[class="IconBtn"]:focus { border-color: @accent; }
+QPushButton[class="IconBtn"]:disabled { color: @muted; border-color: transparent; }
+QPushButton#ExportBtn:focus, QPushButton#ActionBtn:focus, QPushButton#EmptyImportBtn:focus { border: 1px solid @text; }
 
 QPushButton#PrimaryGhostBtn, QPushButton[class="ToolBtn"], QPushButton#FullscreenBtn,
 QDialogButtonBox QPushButton, QComboBox, QAbstractSpinBox, QLineEdit, QKeySequenceEdit, QFontComboBox {
@@ -1835,7 +1882,7 @@ QTabWidget#LibraryTabs QTabBar::tab {
     background: @panel; color: @muted; font-size: 10pt; font-weight: 500;
     padding: 14px 24px; margin: 0; border: none; border-bottom: 2px solid transparent; border-radius: 0;
 }
-QTabWidget#LibraryTabs QTabBar::tab:selected { color: @accent; border-bottom-color: @accent; }
+QTabWidget#LibraryTabs QTabBar::tab:selected { background: @chipBg; color: @text; border-bottom-color: @accent; }
 QTabWidget#LibraryTabs QTabBar::tab:hover:!selected { background: @control; color: @text; }
 QSlider::groove:horizontal { background: @frameBorder; }
 QSlider::handle:horizontal { background: @accent; border-color: @accent; }
@@ -2971,7 +3018,7 @@ void MainWindow::openSettingsDialog() {
     removeDirBtn->setObjectName("ToolBtn");
     dirButtons->addWidget(addDirBtn);
     dirButtons->addWidget(removeDirBtn);
-    mediaLayout->addWidget(new QLabel("Folders scanned for recent media at startup", mediaTab));
+    mediaLayout->addWidget(new QLabel("Folders scanned for recent media (including subfolders; refreshes automatically)", mediaTab));
     mediaLayout->addWidget(dirList);
     mediaLayout->addLayout(dirButtons);
     addSettingsPage(mediaTab, "Media");
