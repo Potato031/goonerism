@@ -16,7 +16,7 @@ Pushes to `main` and manual runs of **CI Build and AppImage** build and test the
 
 - **Ctrl+O** imports media. The app opens the newest video from your configured folders and recent files; autoplay follows Settings. Disable “Open the newest video on startup” in Settings to start with an empty workspace.
 - **Ctrl+K** searches actions. Use Up/Down and Enter to run one.
-- Search the media panel by filename. Recent imports and panel sizes persist between sessions.
+- Search the media panel by filename. Settings → Media selects the folders to scan. Only files directly inside those folders are discovered; subfolders are excluded. Discovery runs in the background and refreshes automatically; selected folders override the system Videos location. Thumbnails load first, with scrub previews generated on hover. Recent imports and panel sizes persist between sessions.
 - **View** shows or hides the Media and Effects tabs, or resets the library and timeline layout. Drag the dividers to resize panels; effects scroll in smaller windows.
 - Drop files onto the timeline to append video or audio. Opening a file from the media panel replaces the current timeline.
 - **Ctrl+wheel** zooms at the pointer. Wheel pans a zoomed timeline; **Fit** restores the full view.

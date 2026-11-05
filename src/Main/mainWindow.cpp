@@ -5,6 +5,7 @@
 #include "../Includes/timelinewidget.h"
 #include "../Includes/previewLabel.h"
 #include "../Includes/mediautils.h"
+#include "../Includes/mediaLibrary.h"
 #include "../Includes/appsettings.h"
 #include "../Includes/icons.h"
 #include "../Includes/dragToolButton.h"
@@ -65,37 +66,9 @@
 
 namespace {
 
-QList<QFileInfo> discoverMediaFiles(const QStringList &roots, const QStringList &remembered) {
-    QStringList filters;
-    for (const auto &extension : MediaUtils::knownVideoExtensions() + MediaUtils::knownAudioExtensions())
-        filters.append("*." + extension);
-    QList<QFileInfo> candidates;
-    for (const auto &root : roots) {
-        if (root.isEmpty()) continue;
-        QDirIterator entries(root, filters, QDir::Files, QDirIterator::Subdirectories);
-        while (entries.hasNext()) {
-            entries.next();
-            candidates.append(entries.fileInfo());
-        }
-    }
-    for (const auto &path : remembered) {
-        QFileInfo file(path);
-        if (file.exists() && file.isFile()) candidates.append(file);
-    }
-    QSet<QString> seen;
-    QList<QFileInfo> files;
-    for (const auto &file : candidates) {
-        const auto path = file.absoluteFilePath();
-        if (seen.contains(path)) continue;
-        seen.insert(path);
-        files.append(file);
-    }
-    std::sort(files.begin(), files.end(), [](const QFileInfo &a, const QFileInfo &b) {
-        if (a.lastModified() == b.lastModified()) return a.absoluteFilePath() < b.absoluteFilePath();
-        return a.lastModified() > b.lastModified();
-    });
-    return files;
-}
+using MediaLibrary::mediaDirectories;
+using MediaLibrary::discoverMediaFiles;
+using MediaLibrary::MediaScanResult;
 
 QString buildMediaBadgeText(bool hasVideo, bool hasAudio) {
     if (hasVideo && hasAudio) return "Video + audio";
@@ -146,40 +119,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setupConnections();
     loadInitialVideo();
 
-    // Discover recordings made while the editor is open without blocking playback.
     auto *mediaRefreshTimer = new QTimer(this);
-    mediaRefreshTimer->setInterval(2000);
-    auto *mediaScan = new QFutureWatcher<QStringList>(this);
-    connect(mediaScan, &QFutureWatcher<QStringList>::finished, this, [this, mediaScan]() {
-        // Settings or imports may have changed while this scan was running.
-        if (mediaScan->property("directories").toStringList() != editorSettings.autoLoadDirectories ||
-            mediaScan->property("limit").toInt() != editorSettings.recentMediaLimit ||
-            mediaScan->property("cache").toStringList() != cachedRecentFiles) return;
-        const auto files = mediaScan->result();
-        if (files == cachedRecentFiles) return;
-        cachedRecentFiles = files;
-        recentFilesScanned = true;
-        updateSidebar();
-    });
-    connect(mediaRefreshTimer, &QTimer::timeout, this, [this, mediaScan]() {
-        if (mediaScan->isRunning()) return;
-        QStringList roots = editorSettings.autoLoadDirectories;
-        roots.prepend(QStandardPaths::writableLocation(QStandardPaths::MoviesLocation));
-        QStringList remembered = cachedRecentFiles;
-        remembered.append(makeAppSettings().value("media/recentFiles").toStringList());
-        const int limit = qMax(1, editorSettings.recentMediaLimit);
-        mediaScan->setProperty("directories", editorSettings.autoLoadDirectories);
-        mediaScan->setProperty("limit", editorSettings.recentMediaLimit);
-        mediaScan->setProperty("cache", cachedRecentFiles);
-        mediaScan->setFuture(QtConcurrent::run([roots, remembered, limit]() {
-            QStringList files;
-            for (const auto &file : discoverMediaFiles(roots, remembered)) {
-                files.append(file.absoluteFilePath());
-                if (files.size() >= limit) break;
-            }
-            return files;
-        }));
-    });
+    mediaRefreshTimer->setInterval(5000);
+    connect(mediaRefreshTimer, &QTimer::timeout, this, &MainWindow::requestMediaScan);
     mediaRefreshTimer->start();
 }
 
@@ -1255,7 +1197,7 @@ void MainWindow::importMedia() {
     }
 }
 
-void MainWindow::loadClipDirectly(const QString &filePath) {
+void MainWindow::loadClipDirectly(const QString &filePath, bool remember) {
     if (exportBusy) { TimelineWidget::showNotification("Wait for the export to finish before replacing media."); return; }
     if (QFileInfo(filePath).absoluteFilePath() == currentMediaPath) return;
     player->stop();
@@ -1265,9 +1207,12 @@ void MainWindow::loadClipDirectly(const QString &filePath) {
         return;
     }
 
-    // Track in recents WITHOUT reshuffling the visible list: reordering while
-    // the user is clicking around made the bin feel broken.
-    if (!cachedRecentFiles.contains(filePath)) {
+    // Startup and clicks on existing rows are not new imports. Keep explicit
+    // imports separate from automatically discovered files in saved settings.
+    if (remember && !cachedRecentFiles.contains(filePath)) {
+        ++mediaScanGeneration;
+        if (!importedMediaFiles.contains(filePath)) importedMediaFiles.prepend(filePath);
+        while (importedMediaFiles.size() > qMax(1, editorSettings.recentMediaLimit)) importedMediaFiles.removeLast();
         cachedRecentFiles.prepend(filePath);
         const int recentLimit = qMax(1, editorSettings.recentMediaLimit);
         while (cachedRecentFiles.size() > recentLimit) cachedRecentFiles.removeLast();
@@ -1452,7 +1397,8 @@ void MainWindow::loadEditorSettings() {
     editorSettings.keyExportMutedVideo = settings.value("keybinds/exportMutedVideo", editorSettings.keyExportMutedVideo).toString();
     editorSettings.keyCycleAudioTrack = settings.value("keybinds/cycleAudioTrack", editorSettings.keyCycleAudioTrack).toString();
     editorSettings.keyAddMarker = settings.value("keybinds/addMarker", editorSettings.keyAddMarker).toString();
-    editorSettings.autoLoadDirectories = settings.value("ui/autoLoadDirectories").toStringList();
+    editorSettings.autoLoadDirectories = uiValue("autoLoadDirectories", QStringList()).toStringList();
+    importedMediaFiles = settings.value("media/importedFiles").toStringList();
 
     TimelineWidget::PlaybackSettings playback = timeline->getPlaybackSettings();
     playback.majorSeekMs = settings.value("editing/majorSeekMs", playback.majorSeekMs).toInt();
@@ -1582,6 +1528,7 @@ void MainWindow::saveEditorSettings() const {
     settings.setValue("export/includeSourceNameInExport", exportSettings.includeSourceNameInExport);
     settings.setValue("window/geometry", saveGeometry());
     settings.setValue("media/recentFiles", cachedRecentFiles);
+    settings.setValue("media/importedFiles", importedMediaFiles);
     settings.sync();
 }
 
@@ -1621,6 +1568,9 @@ void MainWindow::applyEditorSettings() {
     timeline->m_waveformColor = QColor(editorSettings.timelineWaveformColor);
 
     recentFilesScanned = false;
+    ++mediaScanGeneration;
+    cachedRecentFiles.clear();
+    QTimer::singleShot(0, this, &MainWindow::requestMediaScan);
 
     if (topPaneSplitter && libraryTabs && workspace) {
         if (editorSettings.sidebarPosition == "right") {
@@ -3010,7 +2960,7 @@ void MainWindow::openSettingsDialog() {
     auto *mediaLayout = new QVBoxLayout(mediaTab);
     auto *dirList = new QListWidget(mediaTab);
     dirList->setObjectName("SettingsList");
-    dirList->addItems(editorSettings.autoLoadDirectories);
+    dirList->addItems(mediaDirectories(editorSettings.autoLoadDirectories));
     auto *dirButtons = new QHBoxLayout();
     auto *addDirBtn = new QPushButton("Add folder", mediaTab);
     auto *removeDirBtn = new QPushButton("Remove selected", mediaTab);
@@ -3018,7 +2968,7 @@ void MainWindow::openSettingsDialog() {
     removeDirBtn->setObjectName("ToolBtn");
     dirButtons->addWidget(addDirBtn);
     dirButtons->addWidget(removeDirBtn);
-    mediaLayout->addWidget(new QLabel("Folders scanned for recent media (including subfolders; refreshes automatically)", mediaTab));
+    mediaLayout->addWidget(new QLabel("Folders scanned for recent media (top level only; refreshes automatically)", mediaTab));
     mediaLayout->addWidget(dirList);
     mediaLayout->addLayout(dirButtons);
     addSettingsPage(mediaTab, "Media");
@@ -3471,19 +3421,39 @@ void MainWindow::openSettingsDialog() {
 }
 
 QStringList MainWindow::collectRecentMediaFiles() const {
-    if (recentFilesScanned) return cachedRecentFiles;
-    QStringList roots = editorSettings.autoLoadDirectories;
-    roots.prepend(QStandardPaths::writableLocation(QStandardPaths::MoviesLocation));
-    QStringList remembered = cachedRecentFiles;
-    remembered.append(makeAppSettings().value("media/recentFiles").toStringList());
-    QStringList files;
-    for (const auto &file : discoverMediaFiles(roots, remembered)) {
-        files.append(file.absoluteFilePath());
-        if (files.size() >= qMax(1, editorSettings.recentMediaLimit)) break;
-    }
-    const_cast<MainWindow*>(this)->cachedRecentFiles = files;
-    const_cast<MainWindow*>(this)->recentFilesScanned = true;
-    return files;
+    return cachedRecentFiles;
+}
+
+void MainWindow::requestMediaScan() {
+    if (mediaScanRunning) return;
+    mediaScanRunning = true;
+    const quint64 generation = mediaScanGeneration;
+    const auto roots = mediaDirectories(editorSettings.autoLoadDirectories);
+    const auto imports = importedMediaFiles;
+    const int limit = qMax(1, editorSettings.recentMediaLimit);
+    auto *watcher = new QFutureWatcher<MediaScanResult>(this);
+    connect(watcher, &QFutureWatcher<MediaScanResult>::finished, this, [this, watcher, generation]() {
+        const auto result = watcher->result();
+        watcher->deleteLater();
+        mediaScanRunning = false;
+        if (generation != mediaScanGeneration) {
+            requestMediaScan();
+            return;
+        }
+        const bool firstScan = !initialMediaScanApplied;
+        initialMediaScanApplied = true;
+        recentFilesScanned = true;
+        if (cachedRecentFiles != result.files || recentMediaIdentities != result.identities || firstScan) {
+            cachedRecentFiles = result.files;
+            recentMediaIdentities = result.identities;
+            updateSidebar();
+        }
+        if (firstScan && editorSettings.loadNewestVideoOnStartup && currentMediaPath.isEmpty() &&
+            !result.newestVideo.isEmpty()) loadClipDirectly(result.newestVideo, false);
+    });
+    watcher->setFuture(QtConcurrent::run([roots, imports, limit]() {
+        return discoverMediaFiles(roots, imports, limit);
+    }));
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
@@ -3565,6 +3535,9 @@ void MainWindow::updateSidebar() {
     sidebarCountLabel->setText(QString("%1 %2")
                                    .arg(recentFiles.size())
                                    .arg(recentFiles.size() == 1 ? "clip" : "clips"));
+    sidebarEmptyLabel->setText(recentFilesScanned ? "No media yet\nImport or drop files to begin"
+                                                  : "Loading media from selected folders…");
+    sidebarCountLabel->setToolTip(mediaDirectories(editorSettings.autoLoadDirectories).join("\n"));
     sidebarEmptyLabel->setVisible(recentFiles.isEmpty());
     sidebarScroll->setVisible(!recentFiles.isEmpty());
 
@@ -3736,20 +3709,5 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
 
 void MainWindow::loadInitialVideo() {
     refreshMediaState();
-    if (!editorSettings.loadNewestVideoOnStartup) return;
-    QStringList roots = editorSettings.autoLoadDirectories;
-    roots.prepend(QStandardPaths::writableLocation(QStandardPaths::MoviesLocation));
-    QStringList remembered = cachedRecentFiles;
-    remembered.append(makeAppSettings().value("media/recentFiles").toStringList());
-    auto *watcher = new QFutureWatcher<QString>(this);
-    connect(watcher, &QFutureWatcher<QString>::finished, this, [this, watcher]() {
-        const auto newest = watcher->result();
-        watcher->deleteLater();
-        if (currentMediaPath.isEmpty() && !newest.isEmpty()) loadClipDirectly(newest);
-    });
-    watcher->setFuture(QtConcurrent::run([roots, remembered]() {
-        for (const auto &file : discoverMediaFiles(roots, remembered))
-            if (MediaUtils::isKnownVideoFile(file.absoluteFilePath())) return file.absoluteFilePath();
-        return QString();
-    }));
+    QTimer::singleShot(0, this, &MainWindow::requestMediaScan);
 }

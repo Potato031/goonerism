@@ -120,7 +120,7 @@ public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
     EditorSettings getEditorSettings() const { return editorSettings; }
-    const QString CURRENT_VERSION = "1.3.3";
+    const QString CURRENT_VERSION = "1.3.4";
     void downloadUpdate(const QString &url);
     void finalizeUpdate();
     void checkForUpdates();
@@ -139,6 +139,7 @@ private:
     void setupTimeline();
     void setupConnections();
     void loadInitialVideo();
+    void requestMediaScan();
     void toggleVideoFullscreen();
     void restoreVideoFromFullscreen();
     void refreshMediaState();
@@ -164,6 +165,11 @@ private:
     QMenu *viewMenu;
     bool exportBusy = false;
     bool recentFilesScanned = false;
+    bool mediaScanRunning = false;
+    bool initialMediaScanApplied = false;
+    quint64 mediaScanGeneration = 0;
+    QStringList importedMediaFiles;
+    QStringList recentMediaIdentities;
 
     QString buildAppStyleSheet() const;
     // Overlay clip <-> preview sync (regions shown/edited on the video)
@@ -276,7 +282,7 @@ private:
     bool switchingSource = false;
     qint64 pendingSeekLocalPos = -1;
     // --- NEW HELPER FUNCTIONS ---
-    void loadClipDirectly(const QString &filePath);
+    void loadClipDirectly(const QString &filePath, bool remember = true);
     void updateSidebar();
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override; // RIGHT

@@ -10,6 +10,7 @@
 
 class PreviewLabel : public QLabel {
     Q_OBJECT
+    friend class EditorTests;
 public:
     explicit PreviewLabel(const QString &videoPath, QWidget *parent = nullptr);
     void setSource(const QString &videoPath);
@@ -22,7 +23,7 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
 
 private:
-    void generatePreview();
+    void generatePreview(bool animated = false);
     void updatePreview(int index);
     void renderAudioPlaceholder();
     void renderLoadingPlaceholder();
@@ -30,7 +31,8 @@ private:
 
     QString path;
     QPixmap filmstrip;
-    int frameCount = 10;
+    int frameCount = 1;
+    QString sourceIdentity;
     bool isHovered = false;
     bool isAudioFile = false;
 };

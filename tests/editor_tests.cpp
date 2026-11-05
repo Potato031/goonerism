@@ -16,6 +16,8 @@
 #include "../src/Includes/mainWindow.h"
 #include "../src/Includes/appsettings.h"
 #include "../src/Includes/mediautils.h"
+#include "../src/Includes/previewLabel.h"
+#include "../src/Includes/mediaLibrary.h"
 
 class EditorTests : public QObject {
     Q_OBJECT
@@ -70,14 +72,15 @@ private slots:
         settings.remove("ui/autoLoadDirectories");
         settings.remove("ui/recentMediaLimit");
         settings.remove("media/recentFiles");
+        settings.remove("media/importedFiles");
         settings.sync();
     }
-    void mediaBinDiscoversNestedAndNewRecordings() {
+    void mediaBinDiscoversTopLevelAndNewRecordings() {
         QTemporaryDir recordings;
         QVERIFY(recordings.isValid());
         QVERIFY(QDir().mkpath(recordings.filePath("game/session")));
         for (int i = 0; i < 35; ++i) {
-            QFile clip(recordings.filePath(QString("game/session/clip%1.mp4").arg(i)));
+            QFile clip(recordings.filePath(QString("clip%1.mp4").arg(i)));
             QVERIFY(clip.open(QIODevice::WriteOnly));
             clip.close();
         }
@@ -85,30 +88,159 @@ private slots:
         settings.setValue("ui/autoLoadDirectories", QStringList{recordings.path()});
         settings.setValue("ui/recentMediaLimit", 30);
         settings.remove("media/recentFiles");
+        settings.remove("media/importedFiles");
         settings.sync();
         {
             MainWindow window;
-            QCOMPARE(window.collectRecentMediaFiles().size(), 30);
+            QTRY_COMPARE_WITH_TIMEOUT(window.collectRecentMediaFiles().size(), 30, 6000);
             QCOMPARE(window.sidebarCountLabel->text(), QString("30 clips"));
-            const QString newest = recordings.filePath("game/session/newest.mp4");
+            const QString newest = recordings.filePath("newest.mp4");
             QFile clip(newest);
             QVERIFY(clip.open(QIODevice::WriteOnly));
             QVERIFY(clip.setFileTime(QDateTime::currentDateTime().addSecs(60), QFileDevice::FileModificationTime));
             clip.close();
+            window.requestMediaScan();
             QTRY_COMPARE_WITH_TIMEOUT(window.cachedRecentFiles.value(0), newest, 6000);
             QCOMPARE(window.cachedRecentFiles.size(), 30);
             QVERIFY(window.currentMediaPath.isEmpty());
             QVERIFY(QFile::remove(newest));
+            window.requestMediaScan();
             QTRY_VERIFY_WITH_TIMEOUT(!window.cachedRecentFiles.contains(newest), 6000);
             QCOMPARE(window.cachedRecentFiles.size(), 30);
             window.editorSettings.recentMediaLimit = 32;
             window.applyEditorSettings();
-            QCOMPARE(window.collectRecentMediaFiles().size(), 32);
+            QTRY_COMPARE_WITH_TIMEOUT(window.collectRecentMediaFiles().size(), 32, 6000);
         }
         settings.remove("ui/autoLoadDirectories");
         settings.remove("ui/recentMediaLimit");
         settings.remove("media/recentFiles");
+        settings.remove("media/importedFiles");
         settings.sync();
+    }
+    void mediaLibraryUsesSelectedFoldersAndNewestFiles() {
+        QTemporaryDir selected, unrelated;
+        QVERIFY(selected.isValid());
+        QVERIFY(unrelated.isValid());
+        QVERIFY(QDir().mkpath(selected.filePath("nested/session")));
+        const auto baseTime = QDateTime::currentDateTime().addSecs(-100);
+        for (int i = 0; i < 35; ++i) {
+            QFile clip(selected.filePath(QString("clip%1.mp4").arg(i, 2, 10, QLatin1Char('0'))));
+            QVERIFY(clip.open(QIODevice::WriteOnly));
+            QVERIFY(clip.setFileTime(baseTime.addSecs(i), QFileDevice::FileModificationTime));
+        }
+        // Even a newer video in a subfolder must not appear or open at startup.
+        const QString nested = selected.filePath("nested/session/newest.mp4");
+        QVERIFY(QFile::copy(video, nested));
+        QFile nestedFile(nested);
+        QVERIFY(nestedFile.open(QIODevice::ReadWrite));
+        QVERIFY(nestedFile.setFileTime(QDateTime::currentDateTime().addSecs(60),
+                                      QFileDevice::FileModificationTime));
+        nestedFile.close();
+        const QString outside = unrelated.filePath("unrelated.mp4");
+        QVERIFY(QFile::copy(video, outside));
+        const auto roots = MediaLibrary::mediaDirectories({selected.path()});
+        QCOMPARE(roots, QStringList{selected.path()});
+        auto result = MediaLibrary::discoverMediaFiles(roots, {}, 30);
+        QCOMPARE(result.files.size(), 30);
+        QCOMPARE(result.files.first(), selected.filePath("clip34.mp4"));
+        QCOMPARE(result.files.last(), selected.filePath("clip05.mp4"));
+        QCOMPARE(result.newestVideo, result.files.first());
+        QVERIFY(!result.files.contains(outside));
+        QVERIFY(!result.files.contains(nested));
+        // Explicit imports still work without adding their entire parent library.
+        result = MediaLibrary::discoverMediaFiles(roots, {outside}, 30);
+        QCOMPARE(result.files.first(), outside);
+        const auto defaults = MediaLibrary::mediaDirectories({});
+        QVERIFY(!defaults.contains(QDir::homePath()));
+        QVERIFY(!MediaLibrary::mediaDirectories({"", "  "}).contains(QDir::homePath()));
+        // Newer audio must not prevent startup from finding the newest video.
+        const QString newestAudio = selected.filePath("tone.wav");
+        QVERIFY(QFile::copy(audioFile, newestAudio));
+        result = MediaLibrary::discoverMediaFiles(roots, {}, 1);
+        QCOMPARE(result.files, QStringList{newestAudio});
+        QCOMPARE(result.newestVideo, selected.filePath("clip34.mp4"));
+        result = MediaLibrary::discoverMediaFiles({selected.filePath("nested")}, {}, 30);
+        QVERIFY(result.files.isEmpty());
+        QVERIFY(result.newestVideo.isEmpty());
+    }
+    void mediaFoldersExcludeUnrelatedRecentFiles() {
+        QTemporaryDir selected, unrelated;
+        QVERIFY(selected.isValid());
+        QVERIFY(unrelated.isValid());
+        const QString chosen = selected.filePath("chosen.mp4");
+        const QString outside = unrelated.filePath("unrelated.mp4");
+        QVERIFY(QFile::copy(video, chosen));
+        QVERIFY(QFile::copy(video, outside));
+        auto settings = makeAppSettings();
+        settings.setValue("ui/autoLoadDirectories", QStringList{selected.path()});
+        settings.setValue("media/recentFiles", QStringList{outside});
+        settings.remove("media/importedFiles");
+        settings.sync();
+        {
+            MainWindow window;
+            // Construction never traverses the media library on the GUI thread.
+            QVERIFY(window.cachedRecentFiles.isEmpty());
+            QTRY_VERIFY_WITH_TIMEOUT(window.recentFilesScanned, 5000);
+            QCOMPARE(window.cachedRecentFiles, QStringList{chosen});
+            window.editorSettings.autoLoadDirectories = {unrelated.path()};
+            window.applyEditorSettings();
+            QTRY_COMPARE_WITH_TIMEOUT(window.cachedRecentFiles, QStringList{outside}, 5000);
+        }
+        settings.remove("ui/autoLoadDirectories");
+        settings.remove("media/recentFiles");
+        settings.remove("media/importedFiles");
+        settings.sync();
+    }
+    void shortVideoPreviewsAndRecycledRows() {
+        QTemporaryDir clips;
+        QVERIFY(clips.isValid());
+        const QString red = clips.filePath("red.mp4");
+        const QString blue = clips.filePath("blue.mp4");
+        QVERIFY(generate({"-v", "error", "-y", "-f", "lavfi", "-i", "color=red:size=160x90:rate=30",
+                          "-t", "0.2", "-c:v", "mpeg4", red}));
+        QVERIFY(generate({"-v", "error", "-y", "-f", "lavfi", "-i", "color=blue:size=160x90:rate=30",
+                          "-t", "0.2", "-c:v", "mpeg4", blue}));
+        PreviewLabel preview(red);
+        preview.resize(64, 40);
+        QTRY_VERIFY_WITH_TIMEOUT(!preview.filmstrip.isNull(), 10000);
+        QCOMPARE(preview.frameCount, 1);
+        QVERIFY(preview.filmstrip.toImage().pixelColor(80, 45).red() > 220);
+        preview.isHovered = true;
+        preview.generatePreview(true);
+        QTRY_COMPARE_WITH_TIMEOUT(preview.frameCount, 10, 10000);
+        const QImage strip = preview.filmstrip.toImage();
+        for (int i = 0; i < 10; ++i)
+            QVERIFY(strip.pixelColor(i * 160 + 80, 45).red() > 220);
+        preview.setSource(blue);
+        QTRY_VERIFY_WITH_TIMEOUT(!preview.filmstrip.isNull(), 10000);
+        QCOMPARE(preview.frameCount, 1);
+        QVERIFY(preview.filmstrip.toImage().pixelColor(80, 45).blue() > 220);
+        // The same path can refer to a newly completed or replaced recording.
+        const auto originalIdentity = preview.sourceIdentity;
+        QFile changed(blue);
+        QVERIFY(changed.open(QIODevice::ReadWrite));
+        QVERIFY(changed.setFileTime(QDateTime::currentDateTime().addSecs(60), QFileDevice::FileModificationTime));
+        changed.close();
+        preview.setSource(blue);
+        QVERIFY(preview.sourceIdentity != originalIdentity);
+        QTRY_VERIFY_WITH_TIMEOUT(!preview.filmstrip.isNull(), 10000);
+        QVERIFY(preview.filmstrip.toImage().pixelColor(80, 45).blue() > 220);
+    }
+    void audioOnlyWebmUsesAudioPreview() {
+        const QString recording = sandbox.filePath("participant.webm");
+        QVERIFY(generate({"-v", "error", "-y", "-f", "lavfi", "-i",
+                          "sine=frequency=440", "-t", "0.2", "-c:a", "libopus", recording}));
+        PreviewLabel preview(recording);
+        preview.resize(64, 40);
+        QTRY_VERIFY_WITH_TIMEOUT(preview.isAudioFile, 10000);
+        QVERIFY(preview.filmstrip.isNull());
+        QVERIFY(QFile::exists(preview.sourceIdentity + ".audio"));
+        PreviewLabel cached(recording);
+        QVERIFY(cached.isAudioFile);
+        // Recycled rows must forget the audio-only classification.
+        cached.setSource(video);
+        QVERIFY(!cached.isAudioFile);
+        QTRY_VERIFY_WITH_TIMEOUT(!cached.filmstrip.isNull(), 10000);
     }
     void nativePlaybackDoesNotRepaintEditingLayer() {
         struct PaintCounter : QObject {
