@@ -6,6 +6,8 @@
 #include <QJsonArray>
 #include <QProcess>
 #include <QProgressDialog>
+#include <QTemporaryFile>
+#include "../Includes/updateutils.h"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -69,30 +71,29 @@ void MainWindow::downloadUpdate(const QString &url) {
     connect(reply, &QNetworkReply::finished, [this, reply, progress, manager]() {
         progress->close();
         if (reply->error() == QNetworkReply::NoError) {
-            // --- RESOLVE WRITABLE PATH ---
-            QString appPath;
+            QString appPath = QCoreApplication::applicationFilePath();
 #ifdef Q_OS_LINUX
-            char* envApp = getenv("APPIMAGE");
-            appPath = envApp ? QString::fromLocal8Bit(envApp) : QCoreApplication::applicationFilePath();
-#else
-            appPath = QCoreApplication::applicationFilePath();
+            const QString appImage = qEnvironmentVariable("APPIMAGE");
+            if (!appImage.isEmpty()) appPath = appImage;
 #endif
-            QString folderDir = QFileInfo(appPath).absolutePath();
-
+            // Keep the exact basename, case and directory of the launched app.
+            appPath = QFileInfo(appPath).absoluteFilePath();
+            const QString folderDir = QFileInfo(appPath).absolutePath();
 #ifdef Q_OS_WIN
-            QString fileName = folderDir + "/update.zip";
+            const QString suffix = ".zip";
 #else
-            QString fileName = folderDir + "/update.appimage";
+            const QString suffix = ".appimage";
 #endif
-
-            QFile file(fileName);
-            if (file.open(QFile::WriteOnly)) {
-                file.write(reply->readAll());
-                file.close();
-                finalizeUpdate();
-            } else {
-                QMessageBox::critical(this, "Update Error", "Could not save to writable directory: " + fileName);
+            QTemporaryFile file(folderDir + "/.potato-update-XXXXXX" + suffix);
+            const QByteArray payload = reply->readAll();
+            if (payload.isEmpty() || !file.open() || file.write(payload) != payload.size() || !file.flush()) {
+                QMessageBox::critical(this, "Update Error", "Could not save the complete update in: " + folderDir);
                 isUpdating = false;
+            } else {
+                file.close();
+                // If launching the installer fails, the temporary download is
+                // removed automatically and the existing app remains untouched.
+                if (finalizeUpdate(file.fileName(), appPath)) file.setAutoRemove(false);
             }
         } else {
             isUpdating = false;
@@ -106,64 +107,36 @@ void MainWindow::downloadUpdate(const QString &url) {
     });
 }
 
-void MainWindow::finalizeUpdate() {
-    // --- RESOLVE WRITABLE PATH ---
-    QString appPath;
-#ifdef Q_OS_LINUX
-    char* envApp = getenv("APPIMAGE");
-    appPath = envApp ? QString::fromLocal8Bit(envApp) : QCoreApplication::applicationFilePath();
-#else
-    appPath = QCoreApplication::applicationFilePath();
-#endif
-    QString folderDir = QFileInfo(appPath).absolutePath();
-
+bool MainWindow::finalizeUpdate(const QString &stagedPath, const QString &appPath) {
+    const QString folderDir = QFileInfo(appPath).absolutePath();
 #ifdef Q_OS_WIN
-    QFile batchFile(folderDir + "/update.bat");
-    if (batchFile.open(QFile::WriteOnly)) {
-        QTextStream out(&batchFile);
-        out << "@echo off\n"
-            << "title POTATO UPDATE ENGINE\n"
-            << "echo Waiting for PotatoEditor to exit...\n"
-            << ":loop\n"
-            << "taskkill /f /im PotatoEditor.exe >nul 2>&1\n"
-            << "timeout /t 1 /nobreak >nul\n"
-            // Check if the process is STILL running
-            << "tasklist /fi \"imagename eq PotatoEditor.exe\" | find /i \"PotatoEditor.exe\" >nul\n"
-            // If FIND found the name (Error Level 0), the app is still there, so loop.
-            << "if %errorlevel% equ 0 goto loop\n"
-            << "echo App closed. Extracting update...\n"
-            << "powershell -windowstyle hidden -command \"Expand-Archive -Path '" << folderDir << "/update.zip' -DestinationPath '" << folderDir << "/temp_update' -Force\"\n"
-            << "echo Installing...\n"
-            << "robocopy \"" << folderDir << "/temp_update\" \"" << folderDir << "\" /S /E /MOVE >nul\n"
-            << "rd /s /q \"" << folderDir << "/temp_update\"\n"
-            << "del /f /q \"" << folderDir << "/update.zip\"\n"
-            << "start \"\" \"" << folderDir << "/PotatoEditor.exe\"\n"
-            << "del \"%~f0\"\n";
-        batchFile.close();
-
-        // Use /C to ensure the window stays open if there is an error, or /Q for quiet
-        QProcess::startDetached("cmd.exe", {"/c", folderDir + "/update.bat"});
-        qApp->quit();
-    }
+    QTemporaryFile script(folderDir + "/.potato-updater-XXXXXX.ps1");
+    const QByteArray contents = UpdateUtils::windowsInstallerScript().toUtf8();
 #else
-    QString shPath = folderDir + "/update.sh";
-    QFile shFile(shPath);
-    if (shFile.open(QFile::WriteOnly)) {
-        QTextStream out(&shFile);
-        out << "#!/bin/bash\n"
-            << "sleep 2\n"
-            << "cd \"" << folderDir << "\"\n"
-            << "chmod +x update.appimage\n"
-            // Use quotes in case there are spaces in the user's directory name
-            << "mv \"update.appimage\" \"potatoeditor.appimage\"\n"
-            << "chmod +x \"potatoeditor.appimage\"\n"
-            << "./\"potatoeditor.appimage\" &\n"
-            << "rm -- \"$0\"\n";
-        shFile.close();
-
-        QProcess::execute("chmod", {"+x", shPath});
-        QProcess::startDetached("/bin/bash", {shPath});
-        qApp->quit();
-    }
+    QTemporaryFile script(folderDir + "/.potato-updater-XXXXXX.sh");
+    const QByteArray contents = UpdateUtils::linuxInstallerScript().toUtf8();
 #endif
+    if (!script.open() || script.write(contents) != contents.size() || !script.flush()) {
+        QMessageBox::critical(this, "Update Error", "Could not prepare the update installer.");
+        isUpdating = false;
+        return false;
+    }
+    const QString scriptPath = script.fileName();
+    script.close();
+    const QString pid = QString::number(QCoreApplication::applicationPid());
+#ifdef Q_OS_WIN
+    const bool started = QProcess::startDetached("powershell.exe",
+        {"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
+         stagedPath, appPath, pid}, folderDir);
+#else
+    const bool started = QProcess::startDetached("/bin/bash", {scriptPath, stagedPath, appPath, pid}, folderDir);
+#endif
+    if (!started) {
+        QMessageBox::critical(this, "Update Error", "Could not start the update installer.");
+        isUpdating = false;
+        return false;
+    }
+    script.setAutoRemove(false);
+    qApp->quit();
+    return true;
 }

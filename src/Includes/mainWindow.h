@@ -120,9 +120,9 @@ public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
     EditorSettings getEditorSettings() const { return editorSettings; }
-    const QString CURRENT_VERSION = "1.3.4";
+    const QString CURRENT_VERSION = "1.3.5";
     void downloadUpdate(const QString &url);
-    void finalizeUpdate();
+    bool finalizeUpdate(const QString &stagedPath, const QString &appPath);
     void checkForUpdates();
 
 private slots:

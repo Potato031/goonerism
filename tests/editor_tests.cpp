@@ -18,6 +18,7 @@
 #include "../src/Includes/mediautils.h"
 #include "../src/Includes/previewLabel.h"
 #include "../src/Includes/mediaLibrary.h"
+#include "../src/Includes/updateutils.h"
 
 class EditorTests : public QObject {
     Q_OBJECT
@@ -241,6 +242,75 @@ private slots:
         cached.setSource(video);
         QVERIFY(!cached.isAudioFile);
         QTRY_VERIFY_WITH_TIMEOUT(!cached.filmstrip.isNull(), 10000);
+    }
+    void updaterReplacesExactPathAndRestarts() {
+#ifndef Q_OS_LINUX
+        QSKIP("Exercises the Linux update installer");
+#else
+        QTemporaryDir installation;
+        QVERIFY(installation.isValid());
+        const QString folder = installation.filePath("Folder with spaces and 'quotes' $cash [x]");
+        QVERIFY(QDir().mkpath(folder));
+        const QString target = folder + "/My Editor's $cash [test].AppImage";
+        const QString staged = folder + "/.unique-download.appimage";
+        const QString installer = folder + "/installer.sh";
+        const QString sibling = folder + "/potatoeditor.appimage";
+        auto write = [](const QString &path, const QByteArray &contents) {
+            QFile file(path);
+            return file.open(QIODevice::WriteOnly) && file.write(contents) == contents.size();
+        };
+        QVERIFY(write(target, "old version"));
+        QVERIFY(QFile::setPermissions(target, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner |
+                                            QFile::ReadGroup | QFile::ExeGroup));
+        const auto permissions = QFileInfo(target).permissions();
+        QVERIFY(write(sibling, "different application"));
+        const QByteArray replacement = "#!/bin/sh\nprintf launched > \"$0.started\"\n";
+        QVERIFY(write(staged, replacement));
+        QVERIFY(write(installer, UpdateUtils::linuxInstallerScript().toUtf8()));
+        QProcess process;
+        process.start("/bin/bash", {installer, staged, target, "2147483647"});
+        QVERIFY(process.waitForFinished(5000));
+        QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+        QCOMPARE(process.exitCode(), 0);
+        QFile updated(target);
+        QVERIFY(updated.open(QIODevice::ReadOnly));
+        QCOMPARE(updated.readAll(), replacement);
+        QCOMPARE(QFileInfo(target).permissions(), permissions);
+        QVERIFY(QFile::exists(target + ".started"));
+        QVERIFY(!QFile::exists(staged));
+        QVERIFY(!QFile::exists(installer));
+        QFile other(sibling);
+        QVERIFY(other.open(QIODevice::ReadOnly));
+        QCOMPARE(other.readAll(), QByteArray("different application"));
+#endif
+    }
+    void updaterKeepsOriginalWhenDownloadIsEmpty() {
+#ifndef Q_OS_LINUX
+        QSKIP("Exercises the Linux update installer");
+#else
+        QTemporaryDir installation;
+        QVERIFY(installation.isValid());
+        const QString target = installation.filePath("renamed.AppImage");
+        QFile original(target);
+        QVERIFY(original.open(QIODevice::WriteOnly));
+        original.write("original app");
+        original.close();
+        const QString staged = installation.filePath("empty.appimage");
+        QFile download(staged);
+        QVERIFY(download.open(QIODevice::WriteOnly));
+        download.close();
+        const QString installer = installation.filePath("installer.sh");
+        QFile script(installer);
+        QVERIFY(script.open(QIODevice::WriteOnly));
+        script.write(UpdateUtils::linuxInstallerScript().toUtf8());
+        script.close();
+        QProcess process;
+        process.start("/bin/bash", {installer, staged, target, "2147483647"});
+        QVERIFY(process.waitForFinished(5000));
+        QVERIFY(process.exitCode() != 0);
+        QVERIFY(original.open(QIODevice::ReadOnly));
+        QCOMPARE(original.readAll(), QByteArray("original app"));
+#endif
     }
     void nativePlaybackDoesNotRepaintEditingLayer() {
         struct PaintCounter : QObject {
